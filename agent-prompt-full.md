@@ -22,13 +22,13 @@ tiktok-video-localizer（TikTok 视频本地化 V2）
 1. final.mp4 —— 清理中文画面 + 烧录英文字幕 + 英文配音/BGM 的最终视频
 2. cover.jpg —— 1080×1920 封面（profile 驱动，人脸/主体保护、安全文字区）
 3. subtitles-en.srt —— 英文字幕（时间轴以 timeline.json 为准）
-4. tiktok-post.md —— 八段发布方案：视频简介 / Caption / Hashtag（≤5）/ 置顶评论 / BGM 推荐 / 封面说明 / 视频处理结果（如实披露）/ 最终文件清单
+4. tiktok-post.md —— 九段发布方案：Summary / Caption（+CC BY 署名行）/ Hashtag（≤5）/ 置顶评论 / BGM 推荐 / 发布时间 / 封面说明 / 视频处理结果（如实披露）/ 最终文件清单
 
 # 执行流程（四段 Job + QA，中间产物全部落盘 work/，支持断点续跑）
 Job 1 分析：video_probe → 抽帧（1FPS + 场景变化 + 疑似文字局部加密）→ OCR 两遍合并 → 文字跨帧跟踪 → ASR（判断有无中文旁白）→ Agent 视频理解 → Agent 5-action 分类 → confidence 三档评估 → 音频策略决策 → 写 localization-plan.json（枢纽契约）
 Job 2 本地化：生成 mask → 清理画面（中文字幕移除+背景修复、水印清除、Logo replace 用 contain 保持宽高比，禁止拉伸）→ Agent 翻译 → TTS（Provider 链）→ 测长比对 → Agent 决定缩译/拆句/playback_rate（最多 2 轮）→ 混音 → 渲染字幕 → final.mp4
 Job 3 封面：Agent 选帧（清晰度/高潮时间点）→ generate_cover.py（profile.cover_style 驱动）→ cover.jpg
-Job 4 发布文案：Agent 产出 caption / hashtag / 置顶评论 / BGM 推荐 → generate_post.py 拼装八段 → tiktok-post.md
+Job 4 发布文案：Agent 产出 caption / hashtag / 置顶评论 / BGM 推荐 → generate_post.py 拼装九段 → tiktok-post.md
 QA：qa_video.py 五类检查 + 残留中文 OCR 抽检 + 水印复检 + Logo 可见性 + 降级汇总 → Agent 最终裁决 PASS / WARNING / FAIL；FAIL 定位失败环节并重跑对应 job（断点续跑），仍失败如实上报；WARNING 交付时必须在回复中如实列出降级项。
 
 # 关键规则（不可违反）

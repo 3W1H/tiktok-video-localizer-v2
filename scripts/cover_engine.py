@@ -367,6 +367,7 @@ def compose(frame: Image.Image, spec: CoverSpec,
     res = res or resolve(spec)
     canvas_w, canvas_h = spec.canvas_w, spec.canvas_h
     style = spec.style or {}
+    accent = tuple(style.get("fill_color") or GOLD)
 
     f_head = fit(res.head_font, res.head_size)
     head_text = wrap2(f_head, spec.headline, res.max_w)
@@ -408,11 +409,11 @@ def compose(frame: Image.Image, spec: CoverSpec,
     def build_rows(f_stat_):
         r = []
         if spec.stat:
-            r.append(("stat", stat_text, f_stat_, GOLD, 6))
+            r.append(("stat", stat_text, f_stat_, accent, 6))
         if spec.tagline:
             r.append(("tag", tag_text, f_tag, WHITE, 4))
         if spec.logo:
-            r.append(("logo", spec.logo, f_logo, GOLD, res.brand_stroke))
+            r.append(("logo", spec.logo, f_logo, accent, res.brand_stroke))
         return r
 
     def rows_h(r):
@@ -592,7 +593,7 @@ def compose(frame: Image.Image, spec: CoverSpec,
     record("headline",
            head_text,
            center_text(draw, head_text, f_head, head_y + head_h / 2,
-                       GOLD, res.head_stroke, canvas_w=canvas_w))
+                       accent, res.head_stroke, canvas_w=canvas_w))
     if spec.sub:
         record("sub", spec.sub,
                center_text(draw, spec.sub, f_sub,
@@ -610,7 +611,7 @@ def compose(frame: Image.Image, spec: CoverSpec,
                                        gradient=spec.logo_style == "artistic",
                                        glow=spec.logo_style == "artistic",
                                        highlight=spec.logo_style == "artistic",
-                                       flat=GOLD)
+                                       flat=accent)
             bx, by = int((canvas_w - lw) / 2), int(cy - lh / 2)
             brand_region = {"text": s, "x": bx, "y": by, "w": lw, "h": lh}
             regions.append({"kind": "logo", "text": s, "x": bx, "y": by,
@@ -846,6 +847,12 @@ def letter_cover(img: Image.Image, spec: CoverSpec,
         f_head = fit_line(res.head_font, head_text, f_head.size, max_w, 40)
     head_h = block_h(f_head, head_text)
 
+    accent = tuple((spec.style or {}).get("fill_color") or GOLD)
+    # Cover type colour comes from cover_style.fill_color (SKILL.md 8.2: a
+    # profile value, never a literal). Until 2026-09-27 every element was
+    # drawn in the module-level GOLD (255,208,0), which is DARKER than the
+    # declared #FFDC00 (255,220,0); QA read the profile so it passed while
+    # the pixels disagreed with the spec. Also feeds the brand lockup fill.
     draw = ImageDraw.Draw(canvas, "RGBA")
     regions: List[Dict[str, Any]] = []
 
@@ -857,7 +864,7 @@ def letter_cover(img: Image.Image, spec: CoverSpec,
 
     record("headline", head_text,
            center_text(draw, head_text, f_head, s_top + pad + head_h / 2,
-                       GOLD, res.head_stroke, canvas_w=cw))
+                       accent, res.head_stroke, canvas_w=cw))
 
     f_sub = None
     if spec.sub:
@@ -877,7 +884,7 @@ def letter_cover(img: Image.Image, spec: CoverSpec,
         pending.append(("stat", spec.stat,
                         fit_line(res.head_font, spec.stat,
                                  spec.stat_size or f_head.size, max_w, 40),
-                        GOLD, 6))
+                        accent, 6))
     if spec.tagline:
         pending.append(("tag", spec.tagline,
                         fit_line(BOLD_FONT, spec.tagline,
@@ -888,7 +895,7 @@ def letter_cover(img: Image.Image, spec: CoverSpec,
                         fit_line(res.brand_font, spec.logo,
                                  res.logo_size or max(18, int(f_head.size * 0.5)),
                                  cw - 70, 18),
-                        GOLD, res.brand_stroke))
+                        accent, res.brand_stroke))
     heights = [block_h(f, s) for (_, s, f, _, _) in pending]
     total = sum(heights) + sum(int(h * ROW_GAP) for h in heights[:-1])
     y = s_bot - pad - total
@@ -903,7 +910,7 @@ def letter_cover(img: Image.Image, spec: CoverSpec,
                 canvas, s, res.brand_font, f.size, cy, stroke=stroke,
                 gradient=spec.logo_style == "artistic",
                 glow=spec.logo_style == "artistic",
-                highlight=spec.logo_style == "artistic", flat=GOLD)
+                highlight=spec.logo_style == "artistic", flat=accent)
             bx, by = int((cw - lw) / 2), int(cy - lh / 2)
             brand_region = {"text": s, "x": bx, "y": by, "w": lw, "h": lh}
             regions.append({"kind": "logo", "text": s, "x": bx, "y": by,

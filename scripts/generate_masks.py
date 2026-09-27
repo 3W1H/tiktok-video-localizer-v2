@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (
     save_json, load_json, make_result, log,
     work_path, ensure_dir, require_python_package,
+    normalize_persistent_starts, log_persistent_snaps,
 )
 
 
@@ -122,6 +123,10 @@ def main():
     items = plan.get("items", [])
     frame_w = probe.get("width", 1080)
     frame_h = probe.get("height", 1920)
+
+    # ⚠️ mask 的 start/end 决定 inpaint 的真实时间窗 —— 常驻叠字若起点没归零，
+    # 片头那几帧的原中文永远不会被抹掉（2026-09-27 事故，见 SKILL.md §4）。
+    log_persistent_snaps(normalize_persistent_starts(plan), "generate_masks")
 
     if not items:
         log.warning("No items in localization plan")

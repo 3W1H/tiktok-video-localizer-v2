@@ -11,6 +11,7 @@ TikTok Video Localizer - 公共工具库
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -388,3 +389,93 @@ def text_overlap(text1: str, text2: str) -> float:
     if has_chinese(text1) or has_chinese(text2):
         return char_bigram_jaccard(text1, text2)
     return word_jaccard(text1, text2)
+
+
+# ============================================================
+# 常驻叠字窗口归一化（唯一真源，2026-09-28）
+# ============================================================
+# 背景（2026-09-27 事故）：`title` / `slogan` / `watermark` 这类**常驻**叠字覆盖整片，
+# 但 OCR 往往很晚报出它的首次检出（标题头几帧虚化/淡入，OCR 抓不到帧 0），
+# 于是 plan 里写成了 `start_time = 1.0`。而渲染与 mask 都会把窗口向前扩 `PAD_HEAD`
+# （默认 0.5s），`[0, 0.5s)` 这十几帧**永远不会被清理** —— 05 的顶部中文标题就这样
+# 原样留在了成片开头，QA 按 1FPS 抽帧差点抽不到。
+#
+# 修法：常驻类叠字若「起点落在片头 HEAD_SNAP_SEC 内」**且**「时长 ≥ PERSISTENT_MIN_SEC」，
+# 就把起点强制归零。加时长下限是为了不动真正的短下三分之一标题
+# （t=2s 出现、只显示 3s 的那种），避免把 inpaint 窗口扩到本来没字的画面上。
+#
+# 三个调用方共用本函数（改规则只改这里）：
+#   1. `prepare_plan.py`  —— 起草 plan 时就归一，让 plan 文件本身正确（**主修复**）
+#   2. `generate_masks.py` —— mask 侧兜底，决定 inpaint 的真实时间窗
+#   3. `render_overlays.py` —— 绘制侧兜底
+PERSISTENT_CATEGORIES = ("title", "slogan", "watermark")
+HEAD_SNAP_SEC = 5.0
+PERSISTENT_MIN_SEC = 10.0
+
+
+def normalize_persistent_starts(plan: Dict[str, Any],
+                                head_snap: float = HEAD_SNAP_SEC,
+                                persistent_min_sec: float = PERSISTENT_MIN_SEC) -> List[Dict[str, Any]]:
+    """把「覆盖片头且时长足够」的常驻叠字起点归零（原地修改 plan）。
+
+    返回被改动的条目列表，供调用方打日志/写结果。
+    """
+    changed: List[Dict[str, Any]] = []
+    for it in plan.get("items", []) or []:
+        if it.get("category") not in PERSISTENT_CATEGORIES:
+            continue
+        try:
+            s = float(it.get("start_time", 0) or 0)
+            e = float(it.get("end_time", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if 0.0 < s <= head_snap and (e - s) >= persistent_min_sec:
+            changed.append({
+                "item_id": it.get("item_id"),
+                "category": it.get("category"),
+                "old_start_time": s,
+            })
+            it["start_time"] = 0.0
+    return changed
+
+
+def log_persistent_snaps(changed: List[Dict[str, Any]], where: str = "") -> None:
+    """统一打印归一化告警（三个调用方共用一个文案）。"""
+    for c in changed:
+        log.warning(
+            "persistent %s %s: start_time %.2fs -> 0.00s%s (head-covering overlay; "
+            "otherwise the opening frames keep the original text - fix the plan to "
+            "silence this)",
+            c.get("category"), c.get("item_id") or "-", c.get("old_start_time") or 0.0,
+            f" [{where}]" if where else "")
+
+
+# ============================================================
+# BGM 曲目名归一化（唯一真源，2026-09-28）
+# ============================================================
+# 为什么必须归一：`music/sports/` 下同一首歌既有母版也有变速变体
+# （`Wallpaper.mp3` / `Wallpaper_v2.mp3`、`Crusade.mp3` / `Crusade_variant.mp3`）。
+# 变体是为**破坏音频指纹**做的 `atempo` 变形，但**观众听来还是同一首歌** ——
+# 所以在两件事上必须归到同一个 key：
+#   1. **防重复**（§12.4）：用了 `Crusade` 又用 `Crusade_variant` = 观众眼里重复了。
+#      曲库"有多少首可换"要按**不同歌曲数**算，不是文件数（34 个文件 = 24 首歌）。
+#   2. **署名**（`generate_post.py`）：变体与母版是同一份许可、同一个作者。
+# 两个调用方共用本函数（改规则只改这里）。
+_SEPARATOR_RE = re.compile(r"[\s_\-]+")
+_VARIANT_TAIL_RE = re.compile(r"(?:v\d+|variant|remix)+$", re.IGNORECASE)
+
+
+def normalize_track_key(name: str) -> str:
+    """把文件名或曲名归一成可比较的 key（母版与变体同 key）。
+
+    `Wallpaper.mp3` / `Wallpaper_v2.mp3` / `Five Armies_variant.mp3` → `wallpaper` / `fivearmies`
+    """
+    stem = os.path.splitext(os.path.basename(str(name or "")))[0]
+    stem = _SEPARATOR_RE.sub("", stem).lower()
+    return _VARIANT_TAIL_RE.sub("", stem)
+
+
+def is_variant_track(name: str) -> bool:
+    """判断是不是 `*_variant` / `*_v2` 这类指纹变形变体。"""
+    stem = os.path.splitext(os.path.basename(str(name or "")))[0]
+    return bool(_VARIANT_TAIL_RE.search(_SEPARATOR_RE.sub("", stem).lower()))

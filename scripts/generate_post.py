@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
 """
-generate_post.py - 生成 TikTok 发布方案（八段结构 Markdown）
+generate_post.py - 生成 TikTok 发布方案（九段结构 Markdown）
 
 输入：各 plan/结果 JSON + Agent 生成的文案
 输出：output/tiktok-post.md
 
-严格八段结构：
-  一、视频内容简介（必须英文）
-  二、TikTok Caption（英文）
-  三、话题标签（恰好5个，相关且热门）
-  四、推荐置顶评论（英文，含内容预告+品牌账号+互动问题）
-  五、推荐背景音乐（具体歌名+艺术家+授权+下载方式）
-  六、视频封面
-  七、视频处理结果（如实披露降级/低置信度/未解决项）
-  八、最终文件
+固定九段结构（`render_markdown` 里的实际顺序，别按旧文档数错）：
+  1. Video Summary（必须英文）
+  2. TikTok Caption（英文）+ 其后的 BGM 署名块
+  3. Hashtags（恰好 5 个，相关且热门）
+  4. Pinned Comment（英文，含内容预告+品牌账号+互动问题）
+  5. BGM Recommendations（具体歌名+艺术家+BPM+风格+授权+下载方式）
+  6. Posting Time（北京时间 + 对应美东/美西）
+  7. Video Cover
+  8. Processing Report（如实披露降级/低置信度/未解决项）
+  9. Final Files
 
 核心规则（必须遵守，违反即不合格）：
   1. 内容简介、Caption、置顶评论必须是英文（源视频是中文，但目标平台是 TikTok 英文用户）
@@ -21,6 +22,9 @@ generate_post.py - 生成 TikTok 发布方案（八段结构 Markdown）
   3. 置顶评论必须包含：内容预告（驱动关注）、品牌账号、互动问题（提升评论量）
   4. BGM 推荐必须给出具体歌名、艺术家、BPM、风格、授权状态、下载方式，不能泛泛推荐
   5. 发布时间建议必须同时给出北京时间和对应美国时间（美东/美西）
+  6. **已混入视频的 BGM 必须署名**（2026-09-28 新增）：CC BY 的 "BY" 是**许可条件**，
+     与发布平台无关。`resolve_music_credit()` 按 `audio-plan.json` 的实际 BGM 反查曲库，
+     自动生成可粘贴的署名行；许可为 YouTube Audio Library 的曲目直接出「授权不可用」警告。
 
 最终用户输出是 Markdown，不是 JSON。
 """
@@ -28,13 +32,160 @@ generate_post.py - 生成 TikTok 发布方案（八段结构 Markdown）
 import argparse
 import os
 import sys
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (
     save_json, load_json, make_result, log,
-    work_path, output_path,
+    work_path, output_path, load_yaml, CONFIGS_DIR,
+    normalize_track_key,   # 母版与变速变体归一到同一 key（唯一真源在 common.py）
 )
+
+
+# ============================================================
+# BGM 署名（2026-09-28 新增）
+# ============================================================
+# SKILL.md §12.4 第 6 条一早要求"已混入视频的 BGM 要在 tiktok-post.md 里署名"，
+# 但本脚本从来没生成过那一行 —— 规格写了、代码没做。这里补上。
+#
+# ⚠️ 署名义务**与发布平台无关**：CC BY 的 "BY" 是许可的**条件**，不是建议。
+#    所以"我只发 TikTok"不构成不署名的理由（曾据此误判过一次，记在这里）。
+
+# 许可 → 可直接粘贴的署名模板（TASL 四要素：Title / Author / Source / License）
+_CREDIT_TEMPLATES = {
+    "cc by 3.0": "{title} by {artist} ({source}), licensed under Creative Commons: By Attribution 3.0",
+    "cc by 4.0": "{title} by {artist} ({source}), licensed under Creative Commons: By Attribution 4.0",
+}
+
+# 这些许可**禁止**在 TikTok 使用：YouTube Audio Library 的标准许可只覆盖 YouTube 站内
+# （YouTube 官方 Help 未给出站外授权，多方梳理一致指向 YouTube-only）。
+# 命中即出警告、**不**生成署名 —— 署名救不了，只能换曲。
+_TIKTOK_UNSAFE_LICENSE_KEYWORDS = ("youtube audio library",)
+
+# 这些许可要求署名，但措辞由版权方规定，无法安全地自动生成 → 提示人工照抄官方文案。
+_MANUAL_CREDIT_KEYWORDS = ("bensound",)
+
+# 本地 music/ 目录的兜底元数据：music/sports/ 下 34 个文件全部是 Kevin MacLeod /
+# Incompetech 曲目，但 bgm-library.yaml 实测只覆盖其中 **11 个文件 / 8 首歌**
+# （24 首歌里 16 首查不到元数据）。查不到时按本地事实兜底，并**显式标注 inferred**，
+# 让用户知道要核对。
+_LOCAL_MUSIC_FALLBACK = {
+    "artist": "Kevin MacLeod",
+    "source": "Incompetech",
+    "license": "CC BY 3.0",
+}
+
+def load_bgm_library_index() -> Dict[str, Dict[str, Any]]:
+    """把曲库摊平成 {归一化曲名: 曲目元数据} 索引。
+
+    两个来源合并（`normalize_track_key` 归一，母版与变体同 key）：
+      1. `configs/bgm-library.yaml`         —— **人工维护**的曲库主干（有注释，脚本从不写它）
+      2. `configs/bgm-library-added.json`   —— `bgm_ledger.py add` **自动入册**的新曲目
+         （单独放 JSON 是为了不破坏 yaml 里的人工注释；两者冲突时以 yaml 为准）
+    """
+    index: Dict[str, Dict[str, Any]] = {}
+
+    # 来源 2 先放，来源 1 覆盖 —— 人工维护的登记优先
+    added = os.path.join(CONFIGS_DIR, "bgm-library-added.json")
+    if os.path.exists(added):
+        for track in (load_json(added, {}) or {}).get("tracks", []) or []:
+            key = normalize_track_key(track.get("name", ""))
+            if key:
+                index[key] = track
+
+    cfg = os.path.join(CONFIGS_DIR, "bgm-library.yaml")
+    if not os.path.exists(cfg):
+        log.warning(f"BGM library not found: {cfg}")
+        return index
+    try:
+        data = load_yaml(cfg)
+    except Exception as exc:  # yaml 坏了不该让整个发布方案生成失败
+        log.warning(f"Cannot read {cfg}: {exc}")
+        return index
+    for _cat, body in (data.get("categories") or {}).items():
+        for track in (body or {}).get("tracks") or []:
+            key = normalize_track_key(track.get("name", ""))
+            if key:
+                index[key] = track
+    return index
+
+
+def resolve_music_credit(work_dir: str) -> Optional[Dict[str, Any]]:
+    """根据**实际混入视频**的 BGM 生成署名信息。
+
+    数据来源：`audio-plan.json` 的 `bgm.asset_path`，其次 `bgm-plan.json` 的 `asset_path`。
+    返回 `None` 表示这条视频没有混入任何 BGM（无需署名）。
+    """
+    audio_plan = load_json(work_path(work_dir, "audio-plan.json"), {}) or {}
+    bgm_plan = load_json(work_path(work_dir, "bgm-plan.json"), {}) or {}
+
+    asset = ((audio_plan.get("bgm") or {}).get("asset_path")
+             or bgm_plan.get("asset_path"))
+    if not asset:
+        return None
+
+    title = os.path.splitext(os.path.basename(str(asset)))[0]
+    meta = load_bgm_library_index().get(normalize_track_key(asset))
+    inferred = False
+    if not meta:
+        meta = dict(_LOCAL_MUSIC_FALLBACK)
+        inferred = True
+        log.warning(
+            "BGM '%s' 未登记在 bgm-library.yaml，按本地 music/ 目录既有事实"
+            "（%s / %s）兜底 —— 请核对。", title, meta["artist"], meta["license"])
+
+    license_str = str(meta.get("license") or "").strip()
+    lower = license_str.lower()
+
+    if any(k in lower for k in _TIKTOK_UNSAFE_LICENSE_KEYWORDS):
+        return {
+            "track": title, "license": license_str, "unsafe": True,
+            "note": (f"`{title}` 的许可是 **{license_str}** —— 只覆盖 YouTube 站内，"
+                     "用在 TikTok 上有版权风险。必须换曲，署名不能解决。"),
+        }
+
+    if any(k in lower for k in _MANUAL_CREDIT_KEYWORDS) or lower not in _CREDIT_TEMPLATES:
+        return {
+            "track": title, "license": license_str, "manual": True,
+            "note": (f"`{title}` 的许可（{license_str or '未登记'}）要求署名，"
+                     "但措辞由版权方规定，请照抄版权方给出的官方文案。"),
+        }
+
+    return {
+        "track": title,
+        "artist": meta.get("artist"),
+        "source": meta.get("source"),
+        "license": license_str,
+        "inferred": inferred,
+        "credit": _CREDIT_TEMPLATES[lower].format(
+            title=title,
+            artist=meta.get("artist", "unknown"),
+            source=meta.get("source", ""),
+        ),
+    }
+
+
+def _render_music_credit(lines: List[str], credit: Optional[Dict[str, Any]]) -> None:
+    """在 Caption 段后附上 BGM 署名（CC BY 的 'BY' 是硬性许可条件）。"""
+    if not credit:
+        return
+    lines.append("")
+    if credit.get("unsafe"):
+        lines.append(f"🚫 **BGM 授权不可用**：{credit['note']}")
+        return
+    if credit.get("manual"):
+        lines.append(f"⚠️ **BGM 署名需人工处理**：{credit['note']}")
+        return
+
+    lines.append("**BGM credit — CC BY requires attribution; append this line to the caption:**")
+    lines.append("")
+    lines.append("```")
+    lines.append(f"Music: {credit['credit']}")
+    lines.append("```")
+    if credit.get("inferred"):
+        lines.append("")
+        lines.append(f"> ⚠️ 元数据未在 `bgm-library.yaml` 中登记，按本地 `music/` 目录兜底推断为 "
+                     f"{credit.get('artist')} / {credit.get('license')} —— 发布前请核对曲目来源。")
 
 
 def generate_default_hashtags(understanding: Dict, profile: str = "generic") -> List[str]:
@@ -213,8 +364,9 @@ def generate_processing_report(work_dir: str) -> Dict:
 
 
 def render_markdown(content: Dict, processing_report: Dict, output_dir: str,
-                    profile: str = "generic") -> str:
-    """渲染八段结构 Markdown"""
+                    profile: str = "generic",
+                    music_credit: Optional[Dict[str, Any]] = None) -> str:
+    """渲染固定九段结构 Markdown"""
     lines = []
     lines.append("# TikTok Post Plan")
     lines.append("")
@@ -229,17 +381,17 @@ def render_markdown(content: Dict, processing_report: Dict, output_dir: str,
     lines.append(f"**Summary**: {content.get('summary', 'N/A')}")
     lines.append("")
 
-    # 二、TikTok Caption（英文）
+    # 二、TikTok Caption（英文）+ BGM 署名（CC BY 的 "BY" 是硬性条件，见 §12.4）
     lines.append("## 2. TikTok Caption")
     lines.append("")
     lines.append("```")
     lines.append(content.get("caption", "N/A"))
     lines.append("```")
+    _render_music_credit(lines, music_credit)
     lines.append("")
 
     # 三、话题标签（恰好5个，相关且热门）
     lines.append("## 3. Hashtags (5 relevant & trending)")
-    lines.append("")
     hashtags = content.get("hashtags", [])
     if hashtags:
         # 确保恰好 5 个
@@ -392,8 +544,22 @@ def main():
     # 生成处理报告
     processing_report = generate_processing_report(args.work_dir)
 
+    # BGM 署名（CC BY 的 "BY" 是许可条件，与发布平台无关）
+    music_credit = resolve_music_credit(args.work_dir)
+    if music_credit:
+        if music_credit.get("unsafe"):
+            log.warning(f"BGM license NOT usable on TikTok: {music_credit['track']}")
+        elif music_credit.get("manual"):
+            log.warning(f"BGM credit needs manual wording: {music_credit['track']}")
+        else:
+            log.info(
+                f"Music credit: {music_credit['credit']}"
+                + ("  [metadata inferred - verify]" if music_credit.get("inferred") else "")
+            )
+
     # 渲染 Markdown
-    markdown = render_markdown(content, processing_report, args.output_dir, args.profile)
+    markdown = render_markdown(content, processing_report, args.output_dir,
+                               args.profile, music_credit)
 
     # 保存
     out_path = output_path(args.output_dir, "tiktok-post.md")

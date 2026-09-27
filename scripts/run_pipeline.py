@@ -131,6 +131,34 @@ def run_script(script_name: str, args: List[str], work_dir: str,
         return 2
 
 
+class StepProgress:
+    """按「步骤签名」记录已完成的步骤，供 --resume 断点续跑。
+
+    ⚠️ 之前是按「脚本名 → 产物文件名」查存在性来判断跳过，这在**同一个脚本出现
+    两次**时是错的：Job 1 里 `extract_frames.py` / `ocr_video.py` 各有两遍
+    （coarse 与 dense），coarse 跑完后 `frames-index.json` / `ocr.json` 已存在，
+    于是 **dense 那一遍被静默跳过** —— 表现为轨迹时间窗只有 1FPS 精度、
+    首尾有中文残留，而日志看起来一切正常（2026-09-27 实测发现）。
+
+    改为记录 (脚本, 参数) 的签名，同一个脚本的第二遍不会被误判为已完成。
+    """
+
+    def __init__(self, work_dir: str):
+        self.path = work_path(work_dir, ".pipeline-steps.json")
+        self.done = set(load_json(self.path, {}).get("done", []))
+
+    @staticmethod
+    def _key(script: str, args: List[str]) -> str:
+        return f"{script}|{' '.join(args)}"
+
+    def is_done(self, script: str, args: List[str]) -> bool:
+        return self._key(script, args) in self.done
+
+    def mark(self, script: str, args: List[str]) -> None:
+        self.done.add(self._key(script, args))
+        save_json(self.path, {"done": sorted(self.done)})
+
+
 def job_analyze(video: str, work_dir: str, resume: bool = False) -> Dict:
     """Job 1: 分析视频"""
     log.info("=" * 60)
@@ -151,28 +179,21 @@ def job_analyze(video: str, work_dir: str, resume: bool = False) -> Dict:
     ]
 
     results = {}
+    progress = StepProgress(work_dir)
     for script, args, desc in steps:
-        # 断点续跑：检查产物是否已存在
-        if resume:
-            output_map = {
-                "video_probe.py": "probe.json",
-                "extract_frames.py": "frames-index.json",
-                "ocr_video.py": "ocr.json",
-                "detect_text_regions.py": "text-regions.json",
-                "track_text.py": "text-tracks.json",
-                "audio_processor.py": "asr.json",
-            }
-            expected = output_map.get(script)
-            if expected and os.path.exists(work_path(work_dir, expected)):
-                log.info(f"  ⏭ Skipping {script} (output exists)")
-                results[script] = 0
-                continue
+        # 断点续跑：按 (脚本, 参数) 签名判断，避免同一脚本的第二遍被误跳过
+        if resume and progress.is_done(script, args):
+            log.info(f"  ⏭ Skipping {script} (already done with these args)")
+            results[script] = 0
+            continue
 
         code = run_script(script, args, work_dir, desc)
         results[script] = code
         if code == 2:  # 致命错误
             log.error(f"Fatal error in {script}, aborting pipeline")
             break
+        if code == 0:
+            progress.mark(script, args)
 
     return results
 
@@ -216,28 +237,23 @@ def job_localize(video: str, work_dir: str, output_dir: str,
     ]
 
     results = {}
+    progress = StepProgress(work_dir)
     for script, args, desc in steps:
-        if resume:
-            output_map = {
-                "generate_masks.py": "masks/masks-index.json",
-                "clean_video.py": "cleaned.mp4",
-                "audio_processor.py": "tts-result.json",
-                "tts_timing.py": "timeline.json",
-                "render_subtitles.py": "../output/subtitles-en.srt",
-            }
-            expected = output_map.get(script)
-            if expected:
-                expected_path = os.path.join(work_dir, expected) if not expected.startswith("../") else os.path.normpath(os.path.join(work_dir, expected))
-                if os.path.exists(expected_path):
-                    log.info(f"  ⏭ Skipping {script} (output exists)")
-                    results[script] = 0
-                    continue
+        # 断点续跑：按 (脚本, 参数) 签名判断。
+        # ⚠️ 旧实现按「脚本名 → 产物名」查存在性，遇到同一脚本出现两次
+        # （audio_processor.py 既有 tts 又有 mix）时会把 mix 静默跳过。
+        if resume and progress.is_done(script, args):
+            log.info(f"  ⏭ Skipping {script} (already done with these args)")
+            results[script] = 0
+            continue
 
         code = run_script(script, args, work_dir, desc)
         results[script] = code
         if code == 2:
             log.error(f"Fatal error in {script}, aborting pipeline")
             break
+        if code == 0:
+            progress.mark(script, args)
 
     return results
 

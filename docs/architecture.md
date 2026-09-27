@@ -311,7 +311,7 @@ FFmpeg / OpenCV / Pillow / NumPy / PyYAML — 永远本地执行，缺失=环境
 - Confidence 三档 + --review 模式
 - 英文字幕（SRT + 烧录）、Profile 驱动 Cover
 - BGM：用户提供 Asset 或本地曲库混音；推荐标注 Licensing
-- tiktok-post.md 八段 Markdown、qa.json 五类检查、全链路 fallback
+- tiktok-post.md 九段 Markdown、qa.json 五类检查、全链路 fallback
 
 ### Nice to Have
 - 可选 AI inpainting Provider（接口预留，默认 OpenCV）

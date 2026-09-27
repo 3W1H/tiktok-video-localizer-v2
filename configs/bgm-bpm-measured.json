@@ -1,0 +1,314 @@
+{
+  "_note": "实测 BPM（analyze_bgm.py 量出，非人工登记）。选曲按这里的数值匹配，不要用 bgm-library.yaml 里的 bpm 字段 —— 实测 8 个可对照曲目偏差 >5% 的占 8/8，最差 31%。",
+  "_measured_by": "scripts/analyze_bgm.py (onset 谱通量 + 自相关)",
+  "_measured_at": "2026-09-28",
+  "_confidence_guide": "confidence < 0.35 视为存疑，选曲时不要单独依赖它",
+  "tracks": [
+    {
+      "file": "music/sports/Black Vortex.mp3",
+      "bpm_measured": 161.5,
+      "bpm_declared": null,
+      "confidence": 0.7,
+      "duration_sec": 169.7,
+      "category": null,
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Breaktime.mp3",
+      "bpm_measured": 172.3,
+      "bpm_declared": 132,
+      "confidence": 0.39,
+      "duration_sec": 126.1,
+      "category": "high_energy",
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Carefree.mp3",
+      "bpm_measured": 95.7,
+      "bpm_declared": 115,
+      "confidence": 0.55,
+      "duration_sec": 205.1,
+      "category": "medium_energy",
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Cipher.mp3",
+      "bpm_measured": 152.0,
+      "bpm_declared": 130,
+      "confidence": 0.45,
+      "duration_sec": 231.3,
+      "category": "high_energy",
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Crunk Knight.mp3",
+      "bpm_measured": 83.4,
+      "bpm_declared": null,
+      "confidence": 0.6,
+      "duration_sec": 232.0,
+      "category": null,
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Crunk Knight_variant.mp3",
+      "bpm_measured": 139.7,
+      "bpm_declared": null,
+      "confidence": 0.46,
+      "duration_sec": 228.7,
+      "category": null,
+      "is_variant": true
+    },
+    {
+      "file": "music/sports/Crusade.mp3",
+      "bpm_measured": 89.1,
+      "bpm_declared": null,
+      "confidence": 0.25,
+      "duration_sec": 198.7,
+      "category": null,
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Crusade_variant.mp3",
+      "bpm_measured": 92.3,
+      "bpm_declared": null,
+      "confidence": 0.26,
+      "duration_sec": 196.3,
+      "category": null,
+      "is_variant": true
+    },
+    {
+      "file": "music/sports/Cut and Run.mp3",
+      "bpm_measured": 107.7,
+      "bpm_declared": null,
+      "confidence": 0.53,
+      "duration_sec": 214.8,
+      "category": null,
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Cut and Run_variant.mp3",
+      "bpm_measured": 107.7,
+      "bpm_declared": null,
+      "confidence": 0.53,
+      "duration_sec": 212.2,
+      "category": null,
+      "is_variant": true
+    },
+    {
+      "file": "music/sports/Faster Does It.mp3",
+      "bpm_measured": 136.0,
+      "bpm_declared": null,
+      "confidence": 0.37,
+      "duration_sec": 181.8,
+      "category": null,
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Faster Does It_variant.mp3",
+      "bpm_measured": 92.3,
+      "bpm_declared": null,
+      "confidence": 0.35,
+      "duration_sec": 179.6,
+      "category": null,
+      "is_variant": true
+    },
+    {
+      "file": "music/sports/Five Armies.mp3",
+      "bpm_measured": 112.3,
+      "bpm_declared": null,
+      "confidence": 0.57,
+      "duration_sec": 155.8,
+      "category": null,
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Five Armies_variant.mp3",
+      "bpm_measured": 117.5,
+      "bpm_declared": null,
+      "confidence": 0.56,
+      "duration_sec": 153.9,
+      "category": null,
+      "is_variant": true
+    },
+    {
+      "file": "music/sports/Full On.mp3",
+      "bpm_measured": 129.2,
+      "bpm_declared": null,
+      "confidence": 0.52,
+      "duration_sec": 155.7,
+      "category": null,
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Future Gladiator.mp3",
+      "bpm_measured": 132.5,
+      "bpm_declared": null,
+      "confidence": 0.72,
+      "duration_sec": 217.0,
+      "category": null,
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Griphop.mp3",
+      "bpm_measured": 120.2,
+      "bpm_declared": null,
+      "confidence": 0.67,
+      "duration_sec": 206.7,
+      "category": null,
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Heavy Interlude.mp3",
+      "bpm_measured": 99.4,
+      "bpm_declared": null,
+      "confidence": 0.71,
+      "duration_sec": 52.9,
+      "category": null,
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Heroic Age.mp3",
+      "bpm_measured": 129.2,
+      "bpm_declared": null,
+      "confidence": 0.67,
+      "duration_sec": 97.5,
+      "category": null,
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Heroic Age_v1.mp3",
+      "bpm_measured": 132.5,
+      "bpm_declared": null,
+      "confidence": 0.66,
+      "duration_sec": 96.3,
+      "category": null,
+      "is_variant": true
+    },
+    {
+      "file": "music/sports/Hitman.mp3",
+      "bpm_measured": 152.0,
+      "bpm_declared": 140,
+      "confidence": 0.47,
+      "duration_sec": 200.8,
+      "category": "high_energy",
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Hitman_v3.mp3",
+      "bpm_measured": 152.0,
+      "bpm_declared": null,
+      "confidence": 0.47,
+      "duration_sec": 198.5,
+      "category": null,
+      "is_variant": true
+    },
+    {
+      "file": "music/sports/Impact Moderato.mp3",
+      "bpm_measured": 99.4,
+      "bpm_declared": 130,
+      "confidence": 0.42,
+      "duration_sec": 75.7,
+      "category": "high_energy",
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Impact Moderato_v4.mp3",
+      "bpm_measured": 99.4,
+      "bpm_declared": null,
+      "confidence": 0.34,
+      "duration_sec": 74.8,
+      "category": null,
+      "is_variant": true
+    },
+    {
+      "file": "music/sports/Metalmania.mp3",
+      "bpm_measured": 152.0,
+      "bpm_declared": null,
+      "confidence": 0.51,
+      "duration_sec": 190.5,
+      "category": null,
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Ready Aim Fire.mp3",
+      "bpm_measured": 172.3,
+      "bpm_declared": null,
+      "confidence": 0.39,
+      "duration_sec": 216.9,
+      "category": null,
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Rocket.mp3",
+      "bpm_measured": 117.5,
+      "bpm_declared": null,
+      "confidence": 0.65,
+      "duration_sec": 147.0,
+      "category": null,
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Sneaky Adventure.mp3",
+      "bpm_measured": 112.3,
+      "bpm_declared": null,
+      "confidence": 0.14,
+      "duration_sec": 73.4,
+      "category": null,
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/The Builder.mp3",
+      "bpm_measured": 123.0,
+      "bpm_declared": 105,
+      "confidence": 0.52,
+      "duration_sec": 117.6,
+      "category": "medium_energy",
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/The Path of the Goblin King.mp3",
+      "bpm_measured": 120.2,
+      "bpm_declared": 142,
+      "confidence": 0.57,
+      "duration_sec": 206.4,
+      "category": "high_energy",
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Volatile Reaction.mp3",
+      "bpm_measured": 152.0,
+      "bpm_declared": null,
+      "confidence": 0.61,
+      "duration_sec": 165.4,
+      "category": null,
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Volatile Reaction_variant.mp3",
+      "bpm_measured": 161.5,
+      "bpm_declared": null,
+      "confidence": 0.59,
+      "duration_sec": 163.0,
+      "category": null,
+      "is_variant": true
+    },
+    {
+      "file": "music/sports/Wallpaper.mp3",
+      "bpm_measured": 92.3,
+      "bpm_declared": 108,
+      "confidence": 0.64,
+      "duration_sec": 220.1,
+      "category": "medium_energy",
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Wallpaper_v2.mp3",
+      "bpm_measured": 92.3,
+      "bpm_declared": null,
+      "confidence": 0.48,
+      "duration_sec": 217.6,
+      "category": null,
+      "is_variant": false
+    }
+  ]
+}

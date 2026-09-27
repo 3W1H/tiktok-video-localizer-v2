@@ -1,6 +1,39 @@
 # BGM 音乐库 - 篮球视频专用
 # 根据视频内容、情绪、风格、球员特点推荐合适的背景音乐
 # 所有音乐均为无版权/可商用音乐，来源：Incompetech / Free Music Archive / YouTube Audio Library / TeknoAXE / Bensound
+#
+# ⚠️⚠️ 本文件里的 `bpm` 字段是**人工登记值，不要用于节奏匹配**（2026-09-28 实测：
+#      8 个可对照曲目 **8/8 偏差 >5%**，最差 31% —— Breaktime 登记 132 / 实测 172.3，
+#      Impact Moderato 登记 130 / 实测 99.4）。历史上"节奏对不上""千篇一律"的投诉，
+#      根因就是按这些错值选曲。
+#      → 选曲请查 **`configs/bgm-bpm-measured.json`**：由 scripts/analyze_bgm.py 量出的
+#        实测 BPM（附 confidence 与时长）。BPM 估计本身已自测：5 个已知节拍全部命中、误差 <1%。
+#      → 与视频节奏对齐的完整流程见 SKILL.md §10.1「节奏匹配」。
+#      ⚠️ 另外：本文件里的 `download_url` 多为曲目主页链接，不一定直链音频；真正可用的音频
+#         在 music/sports/ 下（含 *_variant.mp3 变体，已做 atempo 指纹变形）。
+#
+# ⚠️⚠️ 授权分层警告（2026-09-28 核实）：**不是本文件里所有曲子都能用在 TikTok 上**。
+#      - `license: "YouTube Audio Library License"` 的 **8 首**（Energetic Hip Hop /
+#        Power Hip Hop / Lo-Fi Study / Chill Lo-Fi / Smooth Funk / Sad Lo-Fi /
+#        Street Hip Hop / Urban Hip Hop）：该许可**只覆盖 YouTube 站内**，
+#        用在 TikTok 上有版权风险，且**署名不能解决** → 不要选。
+#        （这 8 首目前也没有本地音频文件，只在册 —— 若把它们作为候选传给
+#         `bgm_ledger.py resolve`，会在**下载之前**就被判为「许可不行」并拦下，
+#         所以照 §12.4 第 3 条去做也不会把不合规音频带进流水线。）
+#      - `license: "CC BY 3.0" / "CC BY 4.0"`（Incompetech / Free Music Archive）：
+#        **可商用、可跨平台、可改编**，唯一义务是**署名**。署名由
+#        `generate_post.py::resolve_music_credit()` 自动生成到 `tiktok-post.md`。
+#      - `license: "Bensound License (需署名)"`：署名措辞由版权方规定，脚本只提示、不自动生成。
+#      - ⚠️ 覆盖率实测（2026-09-28，早先写的"34 首里登记了 18 首"是错的）：
+#        本文件 41 条登记中，**只有 8 首在本地 music/sports/ 真有音频**
+#        （按文件名匹配到 11 个文件，含 Hitman_v3 / Impact Moderato_v4 / Wallpaper_v2 三个变体
+#         → 归并后是 8 首歌）；**其余 33 条只是登记，本地没有音频文件**。
+#        → 所以选曲必须先 `bgm_ledger.py resolve`：它会把「仅登记无音频」的候选
+#          单独标出来（既不能直接合成，其中的 YouTube 许可曲还要当场拦下）。
+#      - 选曲主路径是 **`bgm_ledger.py resolve`**（SKILL.md §12.4「两层模型」）：
+#        **上网搜决定"选哪首"，本地库只决定"要不要下载"** ——
+#        本地有音频且没用过 = 直接合成省下载；本地没有 = 下载后 `add` 入册。
+#        ⚠️ 别用 `pick` 当第一步（它只看本地库，有库存偏见，只作兜底）。
 
 # 多维度标签体系
 # - energy: 能量等级 (1-10)

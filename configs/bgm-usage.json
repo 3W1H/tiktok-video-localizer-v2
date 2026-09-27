@@ -1,0 +1,110 @@
+{
+  "_note": "BGM 使用台账：记录每首歌被哪些视频用过，用于『优先用没用过的』与防重复。键是 normalize_track_key() 归一后的曲名 —— 母版与 *_variant 变速变体归到同一个键，因为观众听来是同一首歌。机器维护，勿手改；写入用 `bgm_ledger.py record`。",
+  "tracks": {
+    "hitman": {
+      "display": "Hitman.mp3",
+      "uses": [
+        {
+          "video": "2000_年_NBA_扣篮大赛那些精彩扣篮_卡特_麦迪_弗朗",
+          "output_dir": "/Users/jason/Downloads/tiktok/2000_年_NBA_扣篮大赛那些精彩扣篮_卡特_麦迪_弗朗",
+          "profile": "nba",
+          "used_at": "2026-09-27T17:45:58Z"
+        },
+        {
+          "video": "碾压禁区_无人可挡_2001赛季奥尼尔高光表现集锦_奥尼尔",
+          "output_dir": "/Users/jason/Downloads/tiktok/碾压禁区_无人可挡_2001赛季奥尼尔高光表现集锦_奥尼尔",
+          "profile": "nba",
+          "used_at": "2026-09-27T17:45:58Z"
+        }
+      ],
+      "count": 2,
+      "first_used_at": "2026-09-27T17:45:58Z",
+      "last_used_at": "2026-09-27T17:45:58Z"
+    },
+    "breaktime": {
+      "display": "Breaktime.mp3",
+      "uses": [
+        {
+          "video": "2004年NBA全明星赛_西部以136_132险胜东部_主场",
+          "output_dir": "/Users/jason/Downloads/tiktok/2004年NBA全明星赛_西部以136_132险胜东部_主场",
+          "profile": "nba",
+          "used_at": "2026-09-27T17:45:58Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-09-27T17:45:58Z",
+      "last_used_at": "2026-09-27T17:45:58Z"
+    },
+    "wallpaper": {
+      "display": "Wallpaper_v2.mp3",
+      "uses": [
+        {
+          "video": "奥尼尔_艾佛森_篮球艾佛森_这胖子行啊_xWT126",
+          "output_dir": "/Users/jason/Downloads/tiktok/奥尼尔_艾佛森_篮球艾佛森_这胖子行啊_xWT126",
+          "profile": "nba",
+          "used_at": "2026-09-27T17:45:58Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-09-27T17:45:58Z",
+      "last_used_at": "2026-09-27T17:45:58Z"
+    },
+    "cipher": {
+      "display": "Cipher.mp3",
+      "uses": [
+        {
+          "video": "惊为天人莫兰特街球时刻集锦_各种上篮扣篮和秀操作身体天赋相当",
+          "output_dir": "/Users/jason/Downloads/tiktok/惊为天人莫兰特街球时刻集锦_各种上篮扣篮和秀操作身体天赋相当",
+          "profile": "nba",
+          "used_at": "2026-09-27T17:45:58Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-09-27T17:45:58Z",
+      "last_used_at": "2026-09-27T17:45:58Z"
+    },
+    "thepathofthegoblinking": {
+      "display": "The Path of the Goblin King.mp3",
+      "uses": [
+        {
+          "video": "系列赛大比分1_1_湖人来到丹佛高原魔鬼主场_科比在被多层围",
+          "output_dir": "/Users/jason/Downloads/tiktok/系列赛大比分1_1_湖人来到丹佛高原魔鬼主场_科比在被多层围",
+          "profile": "nba",
+          "used_at": "2026-09-27T17:45:58Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-09-27T17:45:58Z",
+      "last_used_at": "2026-09-27T17:45:58Z"
+    },
+    "thebuilder": {
+      "display": "The Builder.mp3",
+      "uses": [
+        {
+          "video": "论乔丹打球的艺术观赏性_乔丹_篮球之神_nba_篮球_篮球艺",
+          "output_dir": "/Users/jason/Downloads/tiktok/论乔丹打球的艺术观赏性_乔丹_篮球之神_nba_篮球_篮球艺",
+          "profile": "nba",
+          "used_at": "2026-09-27T17:45:58Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-09-27T17:45:58Z",
+      "last_used_at": "2026-09-27T17:45:58Z"
+    },
+    "impactmoderato": {
+      "display": "Impact Moderato.mp3",
+      "uses": [
+        {
+          "video": "麦迪火箭2004_2005赛季高光混剪_35秒13分_季后赛",
+          "output_dir": "/Users/jason/Downloads/tiktok/麦迪火箭2004_2005赛季高光混剪_35秒13分_季后赛",
+          "profile": "nba",
+          "used_at": "2026-09-27T17:45:58Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-09-27T17:45:58Z",
+      "last_used_at": "2026-09-27T17:45:58Z"
+    }
+  },
+  "_updated_at": "2026-09-27T17:45:58Z"
+}

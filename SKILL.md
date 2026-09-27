@@ -16,10 +16,15 @@ description: >
 
 - **§1–§11 是规范**：全局规则、工具选型、封面与品牌规格。
   其中 **§8 是封面 / 品牌规格的唯一出处**。
-- **§12–§16 是返工档案**：按批次记录的踩坑与修复。
-  里面的**规范性规则已上提到 §1–§11**，这些章节只在两种情况下需要读：
+- **§13 是工程约束**（执行效率 / 并发上限 / 返工范围 / 沙箱与后台 / 时间与磁盘预算 /
+  操作纪律）：**开跑前先过一遍 §13 的速查表**，这些是"不做就要重跑几小时"的硬约束。
+- **§12、§14–§16 是返工档案**：按批次记录的踩坑与修复。
+  里面的**规范性规则已上提到 §1–§11 或 §13**，这些章节只在两种情况下需要读：
   ① 想知道「这条规则为什么这么定」② 排查同类问题的现场证据。
   ⚠️ **不要把新规则只写在档案章节里** —— 那是文档失控的起点。
+
+**§12.11 是"本批档案索引"**：第三批（2026-09-27，8 条 NBA）的全部现场证据、判定过程与
+返工账都在那里；它开头的表给出「现象 / 根因 / 规范去向」，据此可跳到对应规范节。
 
 **改文档的约定（很重要）**：同一条规则只允许有一个定义处，其他地方写成
 「见 §X」。2026-09-27 之前 logo 规则散在 §8 / §8.1 / §12.5 / §12.6 / §13.4.2 五处，
@@ -50,7 +55,7 @@ input/
         ├── final.mp4           # 最终英文视频（已清理中文画面 + 英文字幕 + 英文配音/BGM）
         ├── cover.jpg           # TikTok 封面
         ├── subtitles-en.srt    # 英文字幕文件
-        ├── tiktok-post.md      # TikTok 发布方案（八段结构 Markdown）
+        ├── tiktok-post.md      # TikTok 发布方案（九段结构 Markdown）
         └── work/               # 中间产物（JSON/帧/mask 等，支持断点续跑与 Debug）
 ```
 
@@ -72,7 +77,7 @@ input/
 | **Script** | 确定性执行：`scripts/*.py` 全部 CLI 可独立运行、幂等。退出码：0=成功，1=可降级失败（Agent 必须处理），2=致命失败（环境/输入问题，直接上报） | 语义判断（不决定"这段文字是不是 Logo"，只提供 persistence/position/trajectory 证据） |
 | **Provider** | AI 能力实现来源与 fallback 链：Agent Native → Remote → Local Model → graceful degradation。每次降级写入 `provider_used` + `degraded` 字段 | — |
 | **Profile** | 内容风格：语气、caption、hashtag、cover_style、bgm_style 全部来自 `profiles/*.yaml`。新增垂类=新增 YAML，引擎零改动 | 处理逻辑 |
-| **Template** | 最终用户输出格式：tiktok-post.md 八段结构、字幕样式默认值、cover 引擎默认值（被 profile 覆盖） | — |
+| **Template** | 最终用户输出格式：tiktok-post.md 九段结构、字幕样式默认值、cover 引擎默认值（被 profile 覆盖） | — |
 
 > **确定性工具不是 Provider**：FFmpeg / OpenCV / Pillow 是本地确定性工具，永远本地执行、不参与 fallback、缺失=环境问题（退出码 2）。
 
@@ -123,8 +128,10 @@ input/
                                           → timeline.json
   → audio_processor.py --mix（按strategy：静音原轨+TTS+BGM Asset混音+响度归一 / 或原声直通）
                                           → audio-plan.json + mixed音频
-  → render_subtitles.py（以 timeline.json 为准）→ subtitles-en.srt + 烧录
-                                          → final.mp4 → output/
+  → render_subtitles.py（以 timeline.json 为准）→ subtitles-en.srt（**只出 SRT，禁止烧录**）
+      ⚠️ 英文画面字幕已由 render_overlays.py 精绘进 cleaned.mp4；此处再烧一遍 →
+         **同一句会出现上下两行**（2026-09-27 实录）。SRT 只作交付物 + QA 校验基准。
+                                          → final.mp4 = cleaned.mp4 画面 + mixed 音频（`-c:v copy`）→ output/
 
 ■ Job 3: generate-cover
   → [Agent] 候选帧筛选 → pick_cover_frame.py 排名（face_area - clutter）
@@ -132,7 +139,7 @@ input/
   → generate_cover.py（profile.cover_style 驱动：
        ① 封面帧清理：按 localization-plan 的 remove/translate 项自动去除中文/水印（与视频一致，禁止中文带入封面）
        ② 组装 CoverSpec → cover_engine.py 排版（主标题 / 数据行 / 品牌署名
-          全部落在安全区 1080×1080 内；颜色取自 profile.fill_color，必须为黄 #FFDC00）
+          全部落在安全区 1080×1080 内；颜色取自 profile.cover_style.fill_color，nba 定稿 #FFE800）
        ③ 底部品牌署名：渲染 profile.brand_text（如 Hoop Dynasty Daily），位置固定在底部
        → cover-plan.json（含 text_regions/brand_region/safe_text_zone/frame_cleaned_regions）
          + cover.jpg → output/
@@ -147,7 +154,7 @@ input/
   → qa_video.py（六类检查 + 成品中文残留硬门禁 + 水印区复检 + replace后Logo可见性 + review项汇总）
       ★ chinese_residue 是**硬门禁**：对 final.mp4 全片 OCR，检出中文即 FAIL、退出码 1、禁止交付。
         它独立于 localization-plan —— plan 漏了什么，复用 plan 的检查就漏什么（假 PASS 的成因）。
-      cover 检查必查：① 封面中文残留 OCR（RapidOCR）② 标题颜色必须为黄色 #FFDC00
+      cover 检查必查：① 封面中文残留 OCR（RapidOCR）② 标题颜色必须是 profile 的品牌黄（nba 定稿 #FFE800）
                       ③ brand_text 必须渲染 ④ 人脸与实际文字区域重叠判定 ⑤ 封面帧已按 plan 清理
                       ⑥ 标题与品牌署名落在安全带内（主页网格只显示 9:16 的中间部分，见 §8.3）
                                           → qa.json
@@ -180,6 +187,17 @@ input/
 - ASR 口播翻译（画面上无对应中文文字）不需要 removal，直接英文 TTS + 新字幕。
 - `action: review` 的项，clean_video.py 必须跳过且不视为失败；
   `action: replace` 必须有非空 replacement.asset，否则脚本以退出码 1 拒绝并提示。
+- **「只为清理、不产生新文字」的 item 一律用 `category: "watermark"`（2026-09-27）**。
+  成因：`render_overlays.py::build_overlays` 的 `if not text: continue` 在 category 判断**之前**，
+  所以 `action=remove` + `target_text=null` 的项本来就不画任何东西；但
+  `render_subtitles.generate_srt` 是**按 category 过滤**的，只跳过
+  `STATIC_CATEGORIES = ("title","watermark","logo","slogan")` —— 写成 `other`/`scene_text`
+  这类非静态 category，item 就会被当成字幕写进 `subtitles-en.srt`。
+  本批（02/04/08 的三处 OCR 误读清理项）一开始就写错成 `other`/`scene_text`，已全部改为 `watermark`。
+- **中文残留的判定线是「≥2 个连续 CJK 且 conf≥0.5」**，单帧单个 CJK 属于噪声，`keep` 即可。
+  ⚠️ **但"误读"也必须清**：QA 抽帧用的是同一个 OCR 引擎，误读必然复现，辩称「这是假阳性」过不了门禁。
+  本批 3 处误读（LED 计时牌数字、球裤褶皱、广告牌+球衣交界、标题下暗部）全部按
+  **QA 实测检出的 bbox** 做了 inpaint。
 
 ### 2. Confidence 三档
 
@@ -196,6 +214,75 @@ input/
 - **ASR 检测到中文旁白** → `mute_original_tts_bgm`：静音原轨 + 英文 TTS + Instrumental BGM
 - **无中文旁白，保留原声** → `keep_original`：完整保留原声（现场声/欢呼/环境音）
 - **无中文旁白，去掉原声换 BGM** ⭐ → `remove_original_bgm_only`：去掉原视频所有音频（篮球声+原BGM），只混合推荐的纯 BGM（无歌词）。适合篮球集锦类视频，节奏感更强
+- **无中文旁白，但不想丢现场氛围** ⭐ → `duck_original_add_bgm`（2026-09-28 新增）：
+  **保留原片全部音频、整体压到 `duck.volume_db`（默认 −15dB）**，再叠一层授权 BGM。
+  集锦片用它能同时拿到"观众欢呼还在"和"BGM 主导节奏"。`remove_original_bgm_only` 会把现场声
+  一起丢掉、成片发干，就换这一路。
+  ⚠️ **它不是声源分离**：原 BGM 只是被压低、没有消失，所以**只在 ASR 判定「无中文旁白」时可用**
+  （否则中文解说仍听得见）。`audio-plan.json` 写法：
+  ```json
+  {"strategy": "duck_original_add_bgm",
+   "duck": {"volume_db": -15},
+   "bgm": {"asset_path": "...", "volume_db": -10, "fade_in_seconds": 2, "fade_out_seconds": 3},
+   "loudness_normalized": true}
+  ```
+  两路的相对电平在混音前确定（各自 `volume` 后 `amix … normalize=0`），最后整轨 `loudnorm`
+  到 −16 LUFS —— 归一化只改绝对响度、**不改两者的比例**。
+  没有 BGM 资产时退化为"只有压低后的原声"并给 WARNING。
+  ⚠️ **术语澄清（别被 `duck` 这个词误导）**：这里是**固定增益衰减**，**不是** sidechain 动态闪避
+  （电台那种"人一开口、音乐自动让路"）。实现就是两条轨各乘一个常数再相加，**全程比例不变**。
+  所以成品里「原片自带的 BGM」也还在（只是变小了）→ 实际是**两段音乐叠加**，可能发糊。
+  ⚠️ **固定增益的已知弱点（2026-09-28 实测）**：原片自身响度不可控，同一组默认参数在不同片子上
+  得到的"领先量"能差 3 倍，所以**不要以为配了 −15 就一定"BGM 压过原声"**：
+
+  | 片子 | 原片 I | 压低后 | BGM 素材 I | BGM 压低后 | BGM 领先 | 听感 |
+  |---|---|---|---|---|---|---|
+  | 01 奥尼尔·艾佛森 | −12.97 | −27.97 | Wallpaper_v2 −11.23 | −21.23 | **+6.7 dB** | ✅ 干净 |
+  | 07 乔丹观赏性 | −10.20 | −25.20 | Hitman_v3 −13.21 | −23.21 | **+2.0 dB** | ⚠️ 两段音乐接近、会糊 |
+
+  量法：`ffmpeg -i <src> -t 90 -map 0:a:0 -af loudnorm=print_format=json -f null -` 读 `input_i`。
+  **用这条路之前先量原片与 BGM 各自的 I**，按差值反推 `duck.volume_db`；"BGM 明显主导"一般需要
+  **领先 ≥6 dB**。这是本策略目前最脆的地方，迭代方向是"先归一原片响度再按目标比例给增益"。
+  （另：本批 BGM 素材母带已接近削顶 —— Wallpaper_v2 `TP=+0.76 dBTP`、Hitman_v3 `+1.75 dBTP`，
+  靠最后整轨 `loudnorm TP=-1.5` 兜住；**不要单独再把 BGM 拉更亮**。）
+  ⚠️ **用这条路之前必须先过两道闸（2026-09-28 实测坐实：本批 8 条最多只有 1 条合格）**：
+  1. **`asr.has_chinese_narration` 必须为 false**。本批 8 条里 **6 条为 true** —— 原声只降 15dB，
+     中文解说照样听得见，直接出局。
+  2. **原片自带的音乐不能占主导**。本批实测（前 60s）：**06 科比系列赛**谱平坦度 0.035 /
+     节奏强度 9.40（纯音乐参考 0.007 / 9.83）→ 几乎就是纯音乐，叠新 BGM 必然两段音乐打架。
+     只有 **04 莫兰特街球**（0.299 / 5.13，接近粉噪声参考 0.469 / 3.22）算"音乐不主导"。
+  量法（无新依赖，conda python + numpy 即可）：抽 60s 单声道 16k →
+  ① **谱平坦度** = 200–2000Hz 内「几何均值 ÷ 算术均值」逐帧的中位数，越低越有音高
+     （纯音乐 ≈0.007–0.26，粉噪声 ≈0.47）；
+  ② **节奏强度** = 包络调制谱在 1.5–4Hz（90–240BPM）的峰突出度（纯音乐 6.8–9.8，粉噪声 3.2）。
+  **两个指标必须一起看**：打击乐为主的音乐平坦度会偏高（Hitman_v3 = 0.256），只看平坦度会误判。
+  ⚠️ **音量压低 ≠ 版权解除**：音频指纹（Content ID / Shazam 一类）对**增益不敏感** ——
+  EFF 的公开实测里 **±48dB** 的放大/衰减**全部仍被识别**；BMAT 也明说"无论音量多低，都能注意到
+  背景音乐"。所以 duck 保留原 BGM（哪怕压到 −15dB）**不构成任何版权规避**。要清版权只有
+  `remove_original_bgm_only`。**不要把 duck 当"既保氛围又避版权"的中间档推荐给用户。**
+- **有中文解说 → 英文解说要「按原解说的语气语调」生成** ⭐（2026-09-28 新增）：
+  这不是"把中文逐句翻译成英文字幕"就完事 —— 要先用 `analyze_narration.py` 量出
+  原解说的**声学特征**，再据此挑 TTS 音色与语速：
+
+  | 量什么 | 怎么量 | 映射到 |
+  |---|---|---|
+  | 基频 F0 中位数 | 逐 40ms 帧自相关，只取清晰帧（峰/零延迟 > 0.3）的中位数 | 性别 → 音色；相对参考的偏移 → `pitch`（夹 ±25Hz） |
+  | 语速 | 汉字数 ÷ 解说总时长 | 相对 4.5 字/s 的偏离 → `rate`（夹 ±25%） |
+  | 解说段能量 | 解说段 RMS 与全片 RMS 之差 | 情绪强度 → `energetic` / `neutral` / `calm` |
+
+  产物 `work/narration-style.json` 的 `tts_params` 被 `audio_processor.py tts` 直接消费
+  （`--voice/--rate/--pitch` 可覆盖）。音色映射表见 `analyze_narration.py::VOICE_MAP`。
+
+  ⚠️ **必须先过 ASR 幻觉检测**（`detect_asr_hallucination()`）。whisper 在**没有清晰人声**时
+  会**凭空造出**"整 2 秒一段、文本循环、avg_logprob 极低"的中文。实测 01（奥尼尔·艾佛森）：
+  16 段里 **15 段都是整 2.00s**、文本循环「我來做個高度／今天在吃飯／每天打飯／都請問說」、
+  平均 avg_logprob **−0.81**、重复句占比 **94%** —— 若照它生成英文解说，就是**无中生有**地
+  给球迷塞一段跟原片无关的旁白。判据是三条（置信度 / 重复句占比 / 固定时长占比），
+  **命中两条**才判幻觉（只命中一条可能误伤真解说的口头禅）。
+- **BGM 的节奏必须与视频节奏一致，要有高潮起落** ⭐（2026-09-28 新增）：
+  详见 **§10.1「节奏匹配」**。一句话概括：用 `analyze_rhythm.py` 量视频（场景切换 +
+  运动强度）、用 `analyze_bgm.py` 量 BGM（实测 BPM + 能量曲线 + drop），
+  让 **BGM 的 drop 落在视频的高潮时刻**上，而不是把 BGM 从第 0 秒平铺到片尾。
 - **ASR 完全不可用** → 保守走 `keep_original` + WARNING（宁可保留原声也不误静音）
 
 **`remove_original_bgm_only` 策略说明**：
@@ -204,7 +291,29 @@ input/
 - BGM 要求：纯音乐（无歌词）、节奏感强、根据视频内容匹配能量等级
 - 具体音乐推荐见 `configs/bgm-library.yaml`，必须给出具体音乐名称，不能泛泛推荐
 
-V1 不做 Demucs 等声源分离，不做"压低原声+TTS"混音。
+**⚠️ `remove_original_bgm_only` 的真实语义（2026-09-27 澄清，名字有误导性）**：
+
+它的实现是**丢掉原视频的全部音频**（现场声、观众欢呼、球鞋摩擦、原 BGM 一起没），只铺授权的纯 BGM。
+名字里的 `bgm_only` 说的是**产出**里只有 BGM，**不是**"只把 BGM 去掉"。
+所以它是"清干净中文"最稳的策略（无论 ASR 判定真假，成品都不含任何原始音频），
+**代价是现场氛围一起丢**，集锦片会显得干 —— 要保住现场氛围就用 `duck_original_add_bgm`（见上）。
+
+**✅ 关于 demucs / 声源分离（2026-09-28 更正 + 实测）**：
+
+上一版这里写着「V1 没有 Demucs 等声源分离」——**与事实不符，已作废**：
+本机 conda 环境**已装 `demucs 4.0.1`**（`torch 2.2.2`，htdemucs 权重
+`~/.cache/torch/hub/checkpoints/955717e8-8726e21a.th` 84MB 已在本地缓存，可离线跑）。
+
+**但装了它也做不了"去 BGM 留现场声"**：demucs 是为**人声 / 伴奏**二分设计的（`--two-stems=vocals`），
+而**观众现场噪声与音乐在频谱上高度重叠**，4-stem（vocals/drums/bass/other）会把两者归进同一个 stem ——
+"把观众声从音乐里抠出来"不是它的任务，硬用只会得到糊掉的结果。所以：
+
+- **不存在**"干净地去掉 BGM、保留现场声"的档位，任何环境（含装了 demucs 的）都别承诺这个；
+- 能落地的近似就是 `duck_original_add_bgm`（原声压低 + 叠 BGM）——**如实说明它是"压低"不是"去掉"**；
+- 真要彻底去掉原音频，只有 `remove_original_bgm_only`；要保现场氛围，只有 `keep_original` 或 duck。
+
+**下一版若要真正做分离**，需要的是「音乐 / 非音乐」判别（如音乐活动检测 + VAD 分段），
+不是人声分离模型 —— 记在这里免得下次又走一遍 demucs 的弯路。
 
 ### 4. 时间轴原则
 
@@ -213,6 +322,35 @@ V1 不做 Demucs 等声源分离，不做"压低原声+TTS"混音。
   Agent / Script / TTS Provider 对这个字段采用完全一致的含义。
 - `tts_timing.py` 只测量与执行；缩短译文/拆句/调速由 Agent 决定（`prompts/tts_adjust.md`），最多迭代 2 轮，
   仍放不下 → 记入 `unresolved` → QA WARNING，**不静默丢句**。
+- **常驻叠字（`title`/`slogan`/`watermark` 类，窗口覆盖片头）的 `start_time` 必须显式写 `0.0`**，
+  不要留空让它取 OCR 首检时间 —— **否则片头几帧的中文永远不会被清理**。
+  机制：渲染时每个窗口都按 `PAD_HEAD` 向前扩，若 `start_time > PAD_HEAD`，窗口起点就被推到 0 之后。
+  2026-09-27 实录：两行顶部标题的 `start_time` 取了 OCR 首检时间 `1.0`，而 `PAD_HEAD=0.5`
+  → `[max(0,1.0-0.5), …] = [0.5, …]`，**`[0, 0.5s)` 共 15 帧的中文标题原样留在成片里**；
+  而 QA 按 1FPS 抽帧通常正好抽不到 t=0（那次是运气差抽到了才发现）。
+  ⚠️ 算这个必须用**渲染实际生效的默认值**（`render_overlays.py` 的 `PAD_HEAD` 默认 **0.5**、
+  `PAD_TAIL` 默认 **0.35**），而 `render_parallel` **不传**这两个参数、只有 `--dry-run --sync-timeline`
+  才传 —— 别拿 dry-run 时传的值去估算片头漏了几帧。
+- ✅ **这条规则已由代码兜底（2026-09-28）**，不再只靠 Agent 记性：
+  `common.normalize_persistent_starts()` 是唯一真源，**三处调用**：
+  ① `prepare_plan.py`（起草 plan 时就归一 → **主修复**）
+  ② `generate_masks.py`（mask 的 start/end 决定 inpaint 真实时间窗，必须归一）
+  ③ `render_overlays.py`（绘制侧兜底）。
+  判据（参数 `--head-snap` / `--persistent-min-sec`，默认 **5.0s / 10.0s**）：
+  **常驻类叠字若起点落在片头 5s 内、且时长 ≥10s → 起点强制归零**。
+  加时长下限是为了不动真正的短下三分之一标题（t=2s 出现、只显示 3s 那种），
+  否则会把 inpaint 窗口扩到本来没字的画面上、白白糊掉画面。
+  触发时会打一条 WARNING（`persistent title A1: start_time 1.00s -> 0.00s`）——
+  **看到它就回去把 plan 改对**，别看它被自动修好了就当无事发生。
+  ⚠️ 只改绘制侧的归一**不够**：inpaint 窗口由 `masks-index.json` 决定，
+  所以 `generate_masks.py` 那一处必须在，否则画面上的原中文照样留着。
+  实测（2026-09-28，12s 合成片 + 常驻标题 1.0→11.9s）：
+  渲染窗口从 `[0.5-12.2]` 变成 **`[0.0-12.2]`**、mask 窗口从 `1.00` 变成 **`0.00`**，
+  而 3s 的短角标（2.0→5.0）**保持不动** —— 时长下限生效。
+  📌 **兜底只在内存里归一、不回写 `localization-plan.json`**：因为真正消费这个时间窗的
+  只有"mask"和"渲染"两个脚本（SRT 侧按 category 过滤掉静态项、QA 不读 start_time），
+  它们都已经调用同一个函数，所以不存在跨产物不一致。**plan 文件保持原样 + 打 WARNING，
+  是刻意留给 Agent 的修正信号**；把它悄悄改掉反而会掩盖"plan 写错了"这件事。
 
 ### 5. 诚实原则
 
@@ -548,7 +686,7 @@ python scripts/inpaint_video.py --video input/source.mp4 --output output/final.m
   不随主标题缩放**。旧实现写成 `font_size * 0.5`，导致不同 profile 出 63/56/45 三种字号。
 - **字体**：Impact（即 `font_chain` 第一个已安装项），见 8.2。
 - **封面样式三档**（`--logo-style`，2026-09-27 落地）：
-  - `sticker` **（封面默认）**：Impact + 纯 `#FFDC00` + 黑色细描边（`brand_stroke_width`），无渐变/发光。
+  - `sticker` **（封面默认）**：Impact + 纯 `fill_color`（nba 定稿 `#FFE800`）+ 黑色细描边（`brand_stroke_width`），无渐变/发光。
     **依据**：用户 2026-09-27 给的参考封面截图里，底部 `Hoop Dynasty Daily` 就是 Impact 纯色小字。
   - `artistic`：橙黄渐变 + 黑色粗描边 + 外发光 + 白色高光。
     ⚠️ **封面不要用**：外发光是为「压在杂乱画面上」设计的（视频内替换中文水印），
@@ -581,15 +719,26 @@ python scripts/inpaint_video.py --video input/source.mp4 --output output/final.m
     | 2001奥尼尔震撼西部 | 1080×1920 | 183px | 16.9% | ❌ 需放大到 345px |
     | 卡特关键球T0 | 720×720 | 184px | 25.6% | ❌ 需放大到 230px |
     | 2000全明星名场面 | 1280×960 | 无 | — | ❌ 整条缺 logo |
-- **样式**：白色 `#FFFFFF` + **4px 黑描边** + 轻微投影（与英文字幕统一，`render_overlays.py` 内置）。
-  用户 2026-09-27 明确「大小照截图，**颜色保持一致**」→ 视频内锁定白色+黑描边，
-  **不要改成封面那种金色**（两者是不同介质，别顺手统一）。
+- **样式（2026-09-27 晚 用户定稿）：品牌黄 `#FFE800`** + 4px 黑描边 + 轻微投影。
+  ⚠️ 早前一度是**白色**（当时照截图定的，不是 bug），用户在看完对比图后改口：
+  「视频中打的 logo 不要保持白色，**和封面保持一致**」。
+  - 现在 **title / hook / logo 三者的填充色同一个 `accent`**，`accent` 由
+    `render_overlays.py --profile nba` 从 `cover_style.fill_color` 读出
+    （`--accent "R,G,B"` 可显式覆盖；都没有则回退 `GOLD` 并打警告）。
+    实现：`resolve_accent()` + `build_overlays(..., accent=...)`。
+  - **为什么必须同源**：2026-09-27 首次交付的 6 条里，封面是黄、视频内 logo 是白 ——
+    封面读 profile、视频读模块常量 `WHITE`。同一个「品牌色」写在两处，必然漂。
+  - 改色流程固定为两步：改 `profiles/<profile>.yaml` 的 `fill_color` 一处 →
+    **重出封面（`recover`）＋ 重渲叠字（`--no-inpaint`，见 §13.7）**。
+  - **字幕仍用白色**：subtitle 不是品牌标识，白字 + 黑描边是平台通行的口播字幕色，
+    不要跟着 accent 一起改黄（黄字压在亮画面上会糊）。
 - 一个视频里**只出现一次** logo，不要顶部一个底部一个。
-- 给已经有旧小 logo 的成片换尺寸：`ffmpeg -vf "delogo=<旧logo实际范围>,drawtext=..." -c:a copy`
+- 给已经有旧小 logo 的成片换尺寸/换色：`ffmpeg -vf "delogo=<旧logo实际范围>,drawtext=..." -c:a copy`
   （delogo 框用「成片−源片」差分量出来，**别用 plan 的 bbox** —— bbox 是源水印框，
   不是绘制框）。也可以直接量成片里旧 logo 的 bbox（OCR 一帧即得）。
-- ⚠️ 只改 logo 时**不要整片重渲染**：`render_overlays.py --video <无字底片> --no-inpaint
-  --logo-ratio 0.32` 单帧只要 ~0.1s（见 13.4.3）。
+- ⚠️ 只改 logo 时**不要整片重渲染**：
+  `render_overlays.py --video <无字底片> --no-inpaint --profile nba --logo-ratio 0.32`
+  单帧只要 ~0.06–0.1s（见 13.4.3 / 13.7 的 `clean-base` 快速路径）。
 
 #### 8.2 封面字号、字体、颜色、描边
 
@@ -620,12 +769,40 @@ nba 的 `["Anton","Impact","Arial Black","sans-serif"]` 实测落到 **Impact**�
 - profile 里 `font_chain` 存的是**字体名**（保持可移植），到本机实际字体的映射在
   `common.SYSTEM_FONTS`。不要在脚本里写 `.ttf` 绝对路径。
 
-**颜色**：统一亮黄 `#FFDC00`（`cover_style.fill_color`，必须是 `[255, 220, 0]`）。
+**颜色**：品牌黄 = `cover_style.fill_color`，**nba 定稿 `#FFE800` = `[255, 232, 0]`**
+（2026-09-27 用户看对比图定稿，见下方亮度表 C 档）。`sports.yaml` / `generic.yaml`
+仍是 `[255, 220, 0]`（TikTok 经典 `#FFDC00`），换 profile 前确认一次。
 
 - ⚠️ **禁止配成 `[255, 255, 255]` 白色**（历史上 nba.yaml 曾误配白色，封面标题变白）。
+- ⚠️ **绘制必须读 `fill_color`，脚本里不得出现颜色字面量**（2026-09-27 修的 bug）：
+  `cover_engine.compose()` / `letter_cover()` 里的**主标题、stat 行、品牌署名原本全部硬编码**
+  模块级 `GOLD=(255,208,0)`，profile 的 `fill_color` 只被写进 `meta["styles"]["fill_color"]` ——
+  结果 **QA 读 profile 永远 PASS，实际像素却比规格暗一档**。
+  现已在两个函数里改为 `accent = tuple(style.get("fill_color") or GOLD)`（`GOLD` 仅作兜底默认）。
+  实测修复前后同一封面：像素 `(255,208,0)` → `(255,220,0)`，定稿后 → `(255,232,0)`。
+  **教训与本节开头的"规则有多份"同源：文档写了、实现没做、QA 又只查文档 → 三方一致地错。**
+- ⚠️ **同一个品牌色出现在两个渲染器里**：封面走 `cover_engine`，视频内 title/hook/logo 走
+  `render_overlays.py`。后者现在也通过 `--profile`（读同一个 `fill_color`）取色，
+  所以**改色只需改 profile 一处 + 两处重跑**（封面 `recover` / 叠字 `--no-inpaint` 重渲）。
+  任何"再写一次颜色常量"的行为都会重演 2026-09-27 的「黄封面 + 白 logo」。
 - QA 校验：R≥230, G≥180, B≤80, G>B，非黄色系直接 WARNING。
+  ⚠️ 它校的是 **profile 的值、不读像素** —— 所以改 `fill_color` 时别指望 QA 帮你发现实现没跟上。
+  **定稿后务必用 `chk_accent`（本批 07 的 `tiktok-batch/chk_accent.py`）抽帧/抽图读真实像素。**
 - **为什么黄色**：TikTok 上黄色粗体 + 黑描边是最经典、最醒目的封面文字样式，信息流里一眼可见。
 - 阴影：黑色偏移（+3, +3）。文字区顶部有轻微暗化渐变（不做纯黑色条）。
+- **亮度定稿（2026-09-27 完成）**：用户反馈「封面上的字体颜色偏暗了一点，黄色要稍微亮一点」，
+  看完真实渲染对比图（`cmp/cmp_cover_yellow.png`）后**选 C 档**：
+
+  | 候选 | RGB | G 相对 B 档 | 结论 |
+  |---|---|---|---|
+  | A | 255,208,0 | −12 | **修复前的实际值**（硬编码 GOLD），仅作对照 |
+  | B `#FFDC00` | 255,220,0 | ±0 | TikTok 经典黄，旧 profile 值 |
+  | **C `#FFE800`** | **255,232,0** | **+12** | ✅ **定稿**：明显更亮一档，仍克制 |
+  | D `#FFF200` | 255,242,0 | +22 | 更接近纯黄，未采用 |
+  | E `#FFFC00` | 255,252,0 | +32 | 纯黄，未采用 |
+
+  定稿即**只改 `profiles/<profile>.yaml` 的 `fill_color` 一个数字**（其余 profile 同理），
+  不要再动代码 —— 代码现在已完全跟随 profile。
 
 **描边**：
 
@@ -730,7 +907,8 @@ nba 的 `["Anton","Impact","Arial Black","sans-serif"]` 实测落到 **Impact**�
 1. 封面中文残留 OCR 抽检（RapidOCR，`ocr_cover_chinese()`）。
    **不设 tesseract 兜底** —— 引擎不可用时该项报 warning，**不得**当成「封面干净」。
    检出的中文行需 ≥2 个 CJK 字符才报告（减少单字误报）。
-2. 标题颜色必须是黄 `#FFDC00`（读 `profile_cover_style.fill_color` 判定）。
+2. 标题颜色必须是品牌黄（判定读 `profile_cover_style.fill_color`，nba 定稿 `#FFE800`；
+   阈值式：R≥230 / G≥180 / B≤80 / G>B，**不读像素**，所以别只信这一条）。
 3. `brand_text` 必须渲染（`render.brand_text_rendered`）。
 4. 人脸遮挡判定：用 render 输出的**实际文字区域 bbox（`text_regions`）**与人脸矩形
    做重叠检测。⚠️ **禁止用整个安全区做判定**（会导致人脸在安全区内但文字没压到也误报）。
@@ -745,7 +923,7 @@ nba 的 `["Anton","Impact","Arial Black","sans-serif"]` 实测落到 **Impact**�
 **实现**：`scripts/cover_engine.py`（排版与绘制，两条封面路径共用）；
 颜色取自 `profile.cover_style.fill_color`，字号取自 `font_size` / `brand_size`。
 
-### 8.1 封面文字样式规范（已归并 → §8）
+### 8.8 遗留：规格值不得硬编码（已归并 → §8）
 
 本节原有的颜色 / 字体 / 描边 / 字号 / 安全区 / 品牌署名 / 帧清理 / QA 检查
 **全部内容已并入 §8**，此处不再重复。
@@ -754,6 +932,9 @@ nba 的 `["Anton","Impact","Arial Black","sans-serif"]` 实测落到 **Impact**�
 读取，脚本里不得出现字面量**。历史上 `make_cover.py` 写死过 `108`（字号）、
 `Arial Black`（字体）、`font_size * 0.5`（品牌字号），三次都被用户当场发现 ——
 硬编码的代价是「用户问规范是多少，只能回答文档没写清楚」。
+**2026-09-27 又犯了第四次（更隐蔽）**：`cover_engine.py` 硬编码颜色 `GOLD(255,208,0)`，
+profile 的 `fill_color` 只进 meta 不参与绘制 → 文档对、QA 也 PASS、像素偏暗一档。
+详见 §8.2 的「绘制必须读 `fill_color`」。
 
 
 ### 9. Inpaint 去除中文（非黑色条遮罩）
@@ -826,7 +1007,127 @@ stderr 提示改走 `render_overlays.py`），但**功能完整保留**——它
 - `mute_original_tts_bgm`：静音原轨 + 英文TTS + BGM（有中文旁白时）
 - `remove_original_bgm_only` ⭐：去掉原音频 + 纯BGM（篮球集锦推荐）
 
-**音乐库统计**：45首歌，高能量13首、中等12首、低能量10首、特殊10首，覆盖摇滚/电子/嘻哈/管弦/电影配乐/Lo-Fi/放克/氛围/钢琴/喜剧/复古11种风格。
+**音乐库统计（2026-09-28 实测口径）**：`music/sports/` **34 个文件 = 24 首歌**
+（10 个是 `*_variant` 变速变体，与母版同属一首）。
+⚠️ 早先"45 首"是**按文件＋人工 yaml 条目数**数的，**虚高** ——
+可换歌数必须按歌曲算，否则会误以为库存充足（见 §12.4）。
+
+### 10.1 节奏匹配：BGM 与视频「同拍、共高潮」（2026-09-28 新增）
+
+**问题**：以前 BGM 是「从第 0 秒平铺到片长」—— 配乐的高潮与视频高潮毫无关系，
+用户反馈的"节奏对不上""没有高潮起落"就是这个。
+
+**两条硬要求**：① **节奏要明显**（BPM 落在 120–150 密集鼓点区，不要舒缓）；
+② **高潮要有起落**（BGM 的 drop 压在视频最激烈的那一刻上）。
+
+**流程（⭐ 选曲是第 0 步的**后半**，但必须等量完视频拿到 `suggested_bpm` 才能做）**：
+
+```bash
+# ① 量视频：场景切换 + 运动强度 -> rhythm.json（拿到 suggested_bpm）
+python scripts/analyze_rhythm.py --video <源视频> --work-dir <work>
+
+# ② 按该 BPM / 风格上网搜候选，再用 resolve 逐个查本地库
+#    → 本地有且没用过 = 用本地（省下载）；本地没有 = 去下载
+python scripts/bgm_ledger.py resolve --bpm <suggested_bpm> \
+    --candidate "搜到的第1首::作者" --candidate "搜到的第2首" ...
+
+# ②b 只有裁决是「需下载」时才下载并入册（曲库 +1）
+python scripts/bgm_ledger.py add --audio <下载的文件> --name "<曲名>" \
+    --artist <作者> --source <来源> --license "CC BY 3.0" --category <类目>
+
+# ③ 量 BGM：实测 BPM + 能量曲线 + drop -> bgm-plan.json（读 ① 的结果做对齐）
+python scripts/analyze_bgm.py --bgm music/sports/<曲目>.mp3 --work-dir <work> \
+       --track-name "<曲目>"
+
+# ④ 混音：audio_processor.py mix 自动读 bgm-plan.json 的对齐方案
+python scripts/audio_processor.py mix --video <成片> --work-dir <work> \
+       --output-dir <out> --audio-plan <work>/audio-plan.json --timeline <work>/timeline.json
+
+# ⑤ 记账：记下这条用了哪首，下次才能避免重复
+python scripts/bgm_ledger.py record --track music/sports/<曲目>.mp3 --video <源视频> --output-dir <out>
+```
+
+> ② 的裁决规则见 §12.4「两层模型」：**上网搜是决定"选哪首"，本地库是决定"要不要下载"**。
+> 本地命中**必须**是"没用过"的 —— 用过的直接复用，等于曲库白扩充（§12.4）。
+
+**`rhythm.json` 关键字段**：
+
+| 字段 | 含义 | 怎么用 |
+|---|---|---|
+| `cuts` / `cut_rate_per_min` | 场景切换时刻与频率 | 判断剪辑密度 |
+| `shot_len_median_sec` | 镜头时长中位数 | 折算 BPM |
+| `peaks` / `motion` | 局部峰值 / 逐点运动强度 | 找"最激烈"的时刻 |
+| `climax_mid` | **中后段**最强峰 | ⭐ BGM 的 drop 对齐这里（**不要用 `climax`**，它常落在片头特效上）|
+| `suggested_bpm` / `bpm_source` | 建议 BPM 与依据 | 选曲用 |
+
+**BPM 怎么算出来的**（`bpm_source` 三档）：
+1. **`cuts`（首选）** —— 让「每个镜头 ≈ 整数拍」且 BPM 落在 110–165。实测 01：
+   镜头中位数 1.808s → 每镜头 4 拍 → **132.7 BPM**。
+   *为什么以剪辑点为主*：观众感知的"卡点"是切镜与鼓点同时发生；画面运动的自相关
+   反映攻防起伏，周期常有好几秒，会给出偏低值（01 给 90，不符"节奏要明显"）。
+2. **`motion_autocorr`** —— 剪辑稀疏、但画面自相关置信度 ≥0.25 且 BPM ≥100 时用。
+3. **`default_energetic`** —— 都不成立（长镜头素材）时取 **120–145**。实测 05
+   （824s / 82 处切换 / 镜头长 10s）走这一档。**不要**把画面自相关的低值直接交出去。
+
+**⚠️ 曲库的 BPM 登记值全部不可信**（2026-09-28 实测，8 个可对照曲目 **8/8 偏差 >5%**）：
+
+| 曲目 | 登记 | 实测 | 偏差 |
+|---|---|---|---|
+| Breaktime | 132 | **172.3** | +31% |
+| Impact Moderato | 130 | **99.4** | −24% |
+| Carefree | 115 | **95.7** | −17% |
+| Cipher / The Builder | 130 / 105 | **152.0 / 123.0** | +17% |
+| The Path of the Goblin King | 142 | **120.2** | −15% |
+| Wallpaper | 108 | **92.3** | −15% |
+| Hitman | 140 | **152.0** | +9% |
+
+**选曲一律查 `configs/bgm-bpm-measured.json`**（实测值 + 置信度 + 时长 + 是否 variant）。
+BPM 估计做过准确率自测：**5 个已知节拍全部命中、误差 <1%**（90/108/120/140/160）。
+
+实测可用的高节奏曲目（`confidence ≥ 0.35`）：**132.5** `Future Gladiator` / `Heroic Age_v1`；
+**152.0** `Hitman` / `Hitman_v3` / `Cipher` / `Metalmania` / `Volatile Reaction`；
+**161.5** `Black Vortex` / `Volatile Reaction_variant`。
+⚠️ `Crusade`(conf 0.25) / `Sneaky Adventure`(0.14) 置信度过低，别单独依赖它的 BPM。
+
+**对齐怎么落地**（`audio_processor.build_bgm_track()`）：`atempo`（BPM 拉向视频，
+兼做 §12.4 第 9 条的指纹变形）→ `atrim=start=<offset>`（跳过开头，使 drop 落在 `climax_mid`）
+→ `aloop`（不足则循环，衔接点取能量低谷）→ 淡入淡出。
+
+**验收方式（别只看日志）**：把生成轨的第 3–5s 与原曲第 `offset+3` 秒做归一化互相关。
+实测 `offset=62.79s` 时 **NCC = +0.994**，对照"从头铺"的 −0.056 —— 这才是 offset 真生效的证据。
+
+**三个坑**：
+1. **判定"有没有场景切换"时日志级别必须是 `-v info`**：showinfo 走 info 级，
+   用 `-v error` 会**一个切换点都拿不到**，进而误判成"这条是单镜头"（01 曾如此）。
+2. **同一处闪变会被连报多次**（实测 21.500 / 21.538 只差 0.038s），不合并会把镜头时长
+   中位数算小、BPM 算高 —— 用 `merge_close_cuts()`（间隔 <0.3s 归并）。
+3. **循环衔接点必须避开 drop**：drop 之前天然是全曲最低点，取全局最小会选中"build-up 的谷底"
+   （实测 Wallpaper_v2 选到 88.88s，而 drop 在 89.12s，只差 0.24s），在那里跳回开头会
+   把整个进入段切断。`find_valley()` 已加 ±3s 屏蔽。
+
+**曲源与版权**：**TikTok 官方的 Commercial Music Library（CML）不适用于本场景**，
+理由有 3 条，**前 2 条与发布平台无关**（2026-09-28 补正：早先只写了"跨平台"一条，
+遇到"我只发 TikTok"的追问就会站不住，实际能独立成立的是下面第 1 条）：
+
+1. **CML 的授权只在"app 内选音"时生效**。条款原文：`You may only post or share videos
+   that include Commercial Sounds within TikTok and **by using the sharing features made
+   available to TikTok users**`。本 skill 产出的是**音频已嵌进 MP4、走上传流程**的文件，
+   不是"在 app 内选音" —— 这一步就已经出界。
+2. CML 同时禁止单独取用曲目：`You are not permitted to make available, distribute, or
+   perform the Commercial Sounds separately from the videos into which you have
+   incorporated the Commercial Sound` —— 把 CML 曲目下载下来混进 MP4，也不是被允许的用法。
+3. 此外它的授权也只覆盖 TikTok 站内：`Commercial Uses outside of TikTok are not permitted`。
+
+⚠️ **"我只发 TikTok" 不能解除第 1、2 条** —— 发布平台一致 ≠ 使用方式一致。
+CML 唯一合规的用法是：**视频不带 BGM 上传，在 TikTok 发布流程里选音**；
+但那样就**无法做节奏对齐**（App 内选曲不能 `atempo`、不能偏移），与本节的目标直接冲突。
+所以本 skill 一律走**本地 `music/sports/` 的 CC BY 曲目 + `atempo` 指纹变形**。
+
+⚠️ **CC BY 的 "BY" 是许可条件、与平台无关**：无论发 TikTok、抖音还是别处都必须署名，
+不能因为"只发一个平台"就省掉。署名由 `generate_post.py` 自动写进 `tiktok-post.md`（§12.4 第 6 条）。
+⚠️ `bgm-library.yaml` 中 **8 首**标 `YouTube Audio Library License` 的曲目**不可用于 TikTok**
+（该许可只覆盖 YouTube 站内），脚本会拦下并出「授权不可用」警告。
+⚠️ NCS 曲目已被 TikTok 识别库收录，禁用（§12.4 第 8 条）。
 
 ### 11. 原创化处理（突破 TikTok 非原创判定）
 
@@ -943,17 +1244,103 @@ python originalize_video.py --video input.mp4 --output final.mp4 \
   3. 保留原视频音频（**仅限用户明确说"用原视频BGM"且原片无中文旁白**，如纯比赛现场声）。
 - 不要用 `concat` 拼接导致音频重编码爆音；所有操作 `-c:a copy` 或重新 AAC 192k。
 
-### 12.4 BGM：先搜后用，禁止从本地旧曲库瞎挑
+### 12.4 BGM：**曲库是消耗品** —— 网上搜是选曲，本地库只是"要不要下载"
 
 **踩坑**：直接从本地 7 首里选，用户骂"千篇一律""什么玩意""biabia 打镲"。
+**根因（2026-09-28 用户点破）**：「曲库里的歌曲不应该作为第一选择，应该优先从网上找，
+然后丰富曲库。要不然后续随着视频增多，视频的 BGM 都全相同了，因为曲库不增加啊」
+—— 曲库不增长，复用就是**数学必然**，不是运气问题。光把标点改好没用，得让它长。
+
+⚠️ **先记住一个数字**：`music/sports/` 有 34 个文件，但**只有 24 首歌** ——
+10 个 `*_variant` / `*_v3` 是同一首的变速指纹变形，**观众听来还是同一首**。
+所以"还剩几首可换"必须按**歌曲**算，不能按文件算。
+`bgm_ledger.py` 与 `generate_post.py` 都按 `common.normalize_track_key()` 归并。
+
+**🚦 两层模型（2026-09-28 用户二次纠正 —— 早先写成"① 搜新曲 > ② 本地 > ③ 复用"
+一条阶梯，是错的，会让"网上搜到、本地本来就有"的歌被重新下一遍）**
+
+用户原话：「逻辑应该是**优先网上搜索对应的歌曲**，然后**在本地曲库找，如果有，
+就省去下载部署直接合成，如果没有就去下载**」——这里其实是两件不同的事：
+
+| 层 | 问题 | 池子 | 手段 |
+|---|---|---|---|
+| 第一层 | **选哪首歌** | **全网**（不受库存限制） | 按视频需求上网搜，排出候选先后 |
+| 第二层 | **从哪儿供给** | **本地 `music/`** | 查本地库：命中 = 缓存，省掉下载 + 入册 |
+
+落地就是一条命令：
+
+```bash
+python scripts/bgm_ledger.py resolve --bpm <rhythm.suggested_bpm> \
+    --candidate "网搜第1名::作者" --candidate "网搜第2名" --candidate "..."
+```
+
+`resolve` 逐个裁决（按你给的顺序，不重排）：
+
+| 裁决 | 条件 | 动作 |
+|---|---|---|
+| ✅ **用本地** | 本地有音频 **且没用过** | **省去下载与入册，直接合成**（`analyze_bgm.py` → 混音） |
+| ⬇️ **需下载** | 本地没有音频 | 下载 → `add` 入册 → 合成 |
+| ❌ **已用过** | 本地有，但出过场 | 跳过，看下一候选（**复用=曲库白扩充**）|
+| 🚫 **许可不行** | 许可是 `YouTube Audio Library` 等 | 跳过（只覆盖 YouTube 站内，署名也救不了）|
+| ❌ **重复候选** | 与前面候选同一首（含 `_variant` 撞名）| 跳过 |
+
+> **为什么本地命中必须是"没用过"**：本规则的存在意义就是防复用。若"本地有就直接用"，
+> 用过的那些会被无限复用 —— 又回到"千篇一律"。
+>
+> **为什么"网上搜"必须在本地查之前**：反过来先翻本地库，选曲池就被库存限死了，
+> 变成"我有什么就用什么"（这正是用户否掉的做法）。搜索决定**要哪首**，
+> 本地库只决定**要不要下载**。
+
+**两个必须查的边界情况**（`resolve` 已内置）：
+
+- **同名不同作者**：本地按**曲名**归一，撞名会误判成命中。带 `::作者` 传入即可被提示
+  （`--candidate "Carefree::DJ Nobody"` → ⚠️ 本地同名曲作者是 Kevin MacLeod）。
+- **只在 `bgm-library.yaml` 登记、本地没有音频文件**：这**不算命中**（"本地有"指的是
+  音频真在 `music/` 里，否则没法合成）。但元数据与许可已知 → 许可不行的会在这一步就拦下，
+  不用等 `add` 完才发现。
+
+**辅助命令（不是主路径）**：
+
+- `audit` —— 开工前体检：多少首歌 / 用过几首 / **还剩几首没用过**。低于 8 首
+  （≈一个批次）就该批量补货，别等到无歌可换才开始找。
+- `pick --bpm X` —— **本地库里没用过的**候选按 BPM 接近度排序。用途是**兜底**：
+  网搜无结果时可作搜索线索，或当 `resolve` 报告的"省下载备选"。
+  ⚠️ **不要**把 `pick` 当成选曲第一步（那就是"先翻本地库"的老毛病）。
+- `record` —— 每次用完记一笔，不记下次就不知道这首出过场。
+  > 台账 `configs/bgm-usage.json` 按**歌曲**计数。2026-09-28 导入本批 8 条历史后立刻暴露：
+  > `Hitman.mp3` 与 `Hitman_v3.mp3` 是同一首歌，被两条视频各用了一次
+  > —— **8 条视频其实只出了 7 首歌**，重复在第一批就已经发生了。
 
 **规则**：
+0. **⭐ 先量节奏，再选曲**：跑 `analyze_rhythm.py` 拿视频的
+   `suggested_bpm`，再按上面的两层模型选曲（`resolve`）。**不要再用 `bgm-library.yaml`
+   里的 `bpm` 字段** —— 实测 8/8 全错（最差 31%，见 §10.1）。完整流程见 **§10.1「节奏匹配」**。
 1. **先分析视频风格**（扣篮=高能量鼓点；怀旧=悲怆史诗；战术=中等电子；致敬=电影管弦）。
 2. **去网上搜 TikTok 热门篮球 BGM**（如 Laced Max / Airball / Gnarly 这类），找无版权替代版。
-3. **下载到本地 `music/sports/`**（Kevin MacLeod incompetech CDN 可直接 curl：`https://incompetech.com/music/royalty-free/mp3-royaltyfree/<Name>.mp3`，CC BY 3.0）。
-4. **一批视频内 BGM 不得重复**，每首标记风格/BPM/适用场景。
+   ⚠️ 但 **TikTok 官方商用音乐库（CML）不能用于本场景**：它的授权**只在"app 内选音"时生效**
+   （条款要求 `by using the sharing features made available to TikTok users`），
+   而本 skill 的产物是**音频已嵌进 MP4、走上传流程** —— 所以**即便只发 TikTok 也不适用**。
+   完整 3 条理由见 §10.1 末尾。
+3. **网搜到之后先 `resolve` 查本地，别盲目下载**：本地有且没用过就直接合成（省下载 + 省入册）；
+   确需下载的才走 `bgm_ledger.py add --audio <文件> ...`（自动放进 `music/sports/` + 实测 BPM + 写登记）。
+   Kevin MacLeod incompetech CDN 可直接 curl：`https://incompetech.com/music/royalty-free/mp3-royaltyfree/<Name>.mp3`（CC BY 3.0）。
+4. **一批视频内 BGM 不得重复，且只用没出过场的**：不靠人脑记，用 `resolve`（自动判"已用过"）
+   + `record`（用完记一笔）。
+   ⚠️ **`*_variant` 不算新歌** —— 母版与变体按同一首歌计数（`normalize_track_key`）。
 5. 用户偏好：**重鼓点/trap/808，不要打镲声（cymbal crash）**。被否过的方向记下来（Sneaky Adventure 太慢、Carefree 太飘、Ready Aim Fire 太打镲、The Builder 配悲情不够悲）。
-6. 已混入视频的 BGM 在 `tiktok-post.md` 里署名 "Music: <曲名> by Kevin MacLeod (incompetech.com) CC BY 3.0"。
+6. **已混入视频的 BGM 必须署名（2026-09-28 起由脚本自动生成）**：CC BY 的 "BY" 是
+   **许可条件**、与发布平台无关 —— "只发 TikTok" 不构成不署名的理由。
+   `generate_post.py::resolve_music_credit()` 按 `audio-plan.json` 的 `bgm.asset_path`
+   反查 `configs/bgm-library.yaml`，在 `tiktok-post.md` 的 Caption 段后自动生成可粘贴的
+   `Music: <曲名> by <作者> (<来源>), licensed under Creative Commons: By Attribution X.0`。
+   三个分支：
+   - **yaml 命中** → 直接出署名行。
+   - **yaml 未登记**（实测：yaml 41 条登记里只有 **8 首**在 `music/sports/` 真有音频，
+     即本地 24 首歌里 16 首无元数据；新入册的曲目在
+     `bgm-library-added.json`，会被一起读到）→ 按本地目录既有事实兜底为
+     Kevin MacLeod / Incompetech / CC BY 3.0，并**标注 `inferred`** 提示核对。
+   - **`YouTube Audio Library License` 的 8 首** → **不出署名、直接出「授权不可用」警告**，
+     因为该许可只覆盖 YouTube 站内，署名救不了，只能换曲。
 7. **选曲不限 TikTok 热门（用户偏好 2026-09-24）**：可搜索国内热门曲目；**节奏感优先，音乐无国界**。
    注意：国内热门曲目（抖音热歌/热门伴奏）基本是商业版权，没有免费可商用版，嵌入 TikTok 更易被识别静音；
    国内免费 CC 平台（耳聆网 ear0.com 等）有 JS 反爬，脚本难以下载。落地一律用无版权 CC 素材。
@@ -982,8 +1369,24 @@ python originalize_video.py --video input.mp4 --output final.mp4 \
 - 给"已经有旧小 logo"的成片换新尺寸：`ffmpeg -vf "delogo=<旧logo实际范围>,drawtext=..." -c:a copy`
   （delogo 框用「成片−源片」差分量出来，别用 plan 的 bbox——bbox 是源水印框，不是绘制框）。
   也可以直接量成片里旧 logo 的 bbox（OCR 一帧即得）当作 delogo 框。
-- ⚠️ 只改 logo 时**不要整片重渲染**：`render_overlays.py --video <无字底片> --no-inpaint --logo-ratio 0.32`
-  单帧只要 ~0.1s（见 13.4.3），整片也已备好底片。
+- ⚠️ 只改 logo 时**不要整片重渲染**：`render_overlays.py --video <无字底片> --no-inpaint
+  --profile nba --logo-ratio 0.32`
+  单帧只要 ~0.06–0.1s（见 13.4.3 / 13.9），整片也已备好底片。
+
+**水印"一族多形"：一条 item 收族，别按 OCR 变体开一堆 item（2026-09-27 05 实录）**
+
+同一家水印在不同帧上 OCR 会吐出**不同字**，还会随运动在不同位置上出现。05 的"热越篮球"
+在本批 OCR 里出现了 **7 种变体文本 + 约 50 条不同轨迹**（bbox 每帧都在挪）。
+
+- **按"族"处理，不按变体**：建**一条** `category:"watermark"` 的 item，用
+  **`bbox_override`（一个覆盖所有位置的大框）+ `start_time/end_time` override（覆盖全片）**，
+  一次性清干净。按变体开 50 条 item 会让 plan 无法维护、渲染时逐条 inpaint 也慢得多。
+- 代价：框大 → inpaint 区域大 → 背景重建质量下降。所以**只有在"位置本身在漂"时才用大框**；
+  位置固定的水印（顶部标题、底部长条）仍走**精确 bbox**（§14.1）。
+- 判据：把该水印的 OCR 检出**全部叠在同一张图上**看落点分布 —— 聚成一团 → 精确 bbox；
+  散成一条带 → 用 `bbox_override` 的带状大框。
+- 清理项的 `category` 必须是 `"watermark"`：`title`/`logo` 等其他 category 会被 SRT 侧过滤规则
+  一并丢掉（§13.4），导致"画面清了但 plan 不认"。
 
 ### 12.5.1 文字窗口必须留 padding（否则首帧闪原中文）
 
@@ -1012,11 +1415,20 @@ python scripts/render_overlays.py \
 要点：
 - 读 `localization-plan.json` + `masks/masks-index.json`；`--dry-run` 只打印叠加清单（含 logo 字号/占比），**正式跑前先 dry-run**。
 - `category=watermark` 的项：原文抹掉后**原位重画品牌 mark**（不是丢弃），字号按 `--logo-ratio`（默认 0.32）算。
+- **字幕类 category 走 `SUBTITLE_CATEGORIES = ("subtitle","spoken_subtitle","caption_overlay")`**：
+  只匹配字面量 `"subtitle"` 会把 `spoken_subtitle` / `caption_overlay` **静默丢弃**（2026-09-27 修复）。
+  只清画面、不产生文字的项（OCR 误读清理）请用 `category=watermark`（见 §1）。
+- ⚠️ **它已经把英文画面字幕画出来了**：后续 `render_subtitles.py` **只出 SRT、不要 `--burn`**，
+  否则同一句会出现上下两行（2026-09-27 实录，见主流程 Job 2）。
 - 字幕自动去重叠（保留后开始的那条）；`--sync-timeline` 把去重叠+扩 padding 后的窗口写回 `timeline.json`，
   这样 `render_subtitles.py` 生成的 SRT 与 `qa_video.py` 的冲突检查和画面一致。
+- **品牌色必须来自 `--profile <name>`**（读 `cover_style.fill_color`，`logo`/`title`/`hook` 同源；
+  `--accent "R,G,B"` 可临时覆盖）。**脚本里不要再写颜色常量** —— 封面读 profile、视频读常量，
+  两边必然漂（2026-09-27「黄封面 + 白 logo」事故，见 §8.1 / §13.9）。
 - 其它参数：`--logo-text/--logo-y/--no-logo/--logo-ratio`、`--no-inpaint`（只补 logo 的二次 pass）、
   `--start-time/--max-frames`（抽样）、`--print-logo-size`。
-- 速度参考：720×1280 约 0.25 s/帧（29 min / 230 s 片）；1080×1920 更慢。
+- 速度参考：**带 inpaint** 720×1280 ≈ 0.25 s/帧、1080×1920 ≈ 2.6 s/帧（mask 多时更慢）；
+  **`--no-inpaint` ≈ 0.06–0.1 s/帧**（1280×960 实测 17.6 fps），快 25 倍以上（§13.9）。
   只想改 logo 尺寸就别重跑整片，用 `delogo + drawtext` 单独一遍（见 12.5）。
 
 ### 12.6 封面：按视频内容定制，禁止模板化
@@ -1044,6 +1456,16 @@ python scripts/render_overlays.py \
 4. 分辨率正确：横版比赛 1280×720/960，不强行竖屏。
 5. BGM 不与同批其他视频重复。
 6. tiktok-post.md 不是模板套话。
+
+### 12.9 输出目录：最终产物直接输出视频名目录，禁止 output 子层（用户偏好 2026-09-24）
+
+**踩坑**：脚本默认 `--output-dir <视频名>/output`，用户反馈"不需要多一层 output 目录"。
+
+**规则**：
+- 最终产物（final.mp4 / cover.jpg / subtitles-en.srt / tiktok-post.md）**直接输出到 `<视频名>/` 顶层**；
+- 过程文件（JSON/帧/mask/cleaned/mixed 等）放 `<视频名>/work/`；
+- **不建 output/ 子层**。调用脚本时 `--output-dir` 直接传视频名目录（qa_video 的 cover.json 等也写进视频目录）。
+- 移动产物后验证可访问性，并重新 present 交付。
 
 ### 12.10 clean 快路径与 A/B 验收协议（2026-09-24）
 
@@ -1077,19 +1499,102 @@ python scripts/render_overlays.py \
 - 实测依据：2026-09-25 批（奥尼尔×艾弗森，13 条画面中段喜剧字幕）A/B 双跑，B 的纯黑条带前置检测对全部区域不通过、自动回退 opencv，最终产物与 A **字节级一致（MD5 相同）**，无任何提速收益；QA 双方六项全 PASS。
 - 若未来出现"顶部黑带黄字标题/底部黑带集数标"的纯黑条场景需要提速，**必须重新走本协议 A/B 验收并由用户拍板**后才可临时启用 fast；验收不通过则继续用 A。
 
-### 12.9 输出目录：最终产物直接输出视频名目录，禁止 output 子层（用户偏好 2026-09-24）
+### 12.11 第三批 8 条实战档案（2026-09-27，NBA 混合批次）
 
-**踩坑**：脚本默认 `--output-dir <视频名>/output`，用户反馈"不需要多一层 output 目录"。
+素材：8 条中文 NBA 短视频（横竖混排，50s–824s，合计约 43 分钟 / 5.5 万帧）。
+**规范性结论已上提到 §1 / §3 / §4 / §8.2 / §13.6–13.8**，本节只留现场证据与判定过程。
 
-**规则**：
-- 最终产物（final.mp4 / cover.jpg / subtitles-en.srt / tiktok-post.md）**直接输出到 `<视频名>/` 顶层**；
-- 过程文件（JSON/帧/mask/cleaned/mixed 等）放 `<视频名>/work/`；
-- **不建 output/ 子层**。调用脚本时 `--output-dir` 直接传视频名目录（qa_video 的 cover.json 等也写进视频目录）。
-- 移动产物后验证可访问性，并重新 present 交付。
+**本批暴露的核心问题（按影响排序）**
+
+| # | 现象 | 根因 | 规范去向 |
+|---|---|---|---|
+| 1 | 同一句字幕在成片里出现**上下两行** | overlay 已按原 bbox 精绘白字，第 5 步又用 ffmpeg 通用样式在底部重烧一遍 | §12.5.2 |
+| 2 | 顶部中文标题在**片头若干帧原样残留**（真残留，非误读） | `title.start_time`（OCR 首检 1.0s）> `PAD_HEAD`(0.5) → `[0,0.5s)` 从未进清理窗口 | **§4** |
+| 3 | 封面黄色比规格**暗一档** | `cover_engine` 硬编码 `GOLD(255,208,0)`，profile 的 `fill_color` 只进 meta | **§8.2** |
+| 4 | `spoken_subtitle` 类字幕**全不渲染** | `render_overlays` 只匹配字面量 `"subtitle"` | §12.5.2 / §13.4 |
+| 5 | `mute_original_tts_bgm` 出片**只有 BGM、没有旁白** | `tts_timing measure` 只测时长不合成，链路缺 TTS 步 | §3 / §13.4 |
+| 6 | 4 条视频 QA `chinese_residue` FAIL | 3 处画面**误读** + 1 处**真中文** | §1 判定线 |
+| 7 | 并发把机器打瘫，封面生成被 OOM 杀 2 次 | 4 链 × 3–4 段 × 2 编码器 + 8 OpenCV 进程争 8 核 → load **230** | **§13.6** |
+| 8 | 返工要重渲整片（04 一条 42 分钟） | 缺陷只落在 1 个分段内，其余段本可复用 | **§13.7** |
+| 9 | 长片（05，824s）滚动解说字幕被 OCR **切成碎块**、句子拦腰断 | OCR 只给时间区间，文本要人工整段听合并成 47 条 cue | **§13.3** |
+| 10 | 同一水印（"热越篮球"）OCR 出 **7 种变体 + ~50 条轨迹** | 位置在漂 → 必须按"族"处理，不能按变体开 item | **§12.5** |
+| 11 | 交付后 `tiktok-post.md` 内容与视频无关 | `generate_post.py` 读不到 `post-content.json` 时静默套通用模板 | §13.4 / §6 |
+
+**本批时间与资源账（排期用，见 §13.10）**：Job1 累计约 **8 小时** CPU（最长 05 = 154 分钟）；
+单条 work 最大 **2.3 GB**；期间磁盘 `Data` 卷 **97% 满、可用 15Gi**，直接导致封面生成被 OOM 杀 2 次。
+
+**`chinese_residue` 的五次检出及判定（关键证据，下次照此判）**
+
+| 视频 | 时间 | OCR 检出 | conf | 实际是什么 | 性质 |
+|---|---|---|---|---|---|
+| 02 | 55.0s | `日1口` | 0.555 | LED 计时牌 `8:10` 的数字 | 误读 |
+| 04 | 482.0s | `一川` | 0.597 | 标题下方黑色暗部噪点 | 误读 |
+| 08 | 147.0s | `八年` | 0.833 | 球员球裤 / 腿部皮肤纹理 | 误读 |
+| 08 | 212.0s | `一心` | 0.554 | 场边广告牌 + 球衣交界 | 误读 |
+| 05 | **0.0s** | `碾压禁区?无人可挡` / `2001赛季奥尼尔高光表现集锦` | **0.933 / 0.975** | **顶部两行中文标题本身** | **真残留** |
+
+- 判定口诀：**conf ≥0.9 且文本与已知标题一致 → 真残留**；
+  conf 0.5–0.85 且落在人物/器械/广告牌纹理上 → 误读。**两者都必须清**
+  （QA 同引擎抽帧，误读必然复现，"这是假阳性"过不了门禁）。
+- **抽「原片 / 成片」同一帧、裁剪放大并排看**是最快的证伪手段（本批 4 处都是这样确认的）。
+
+**ASR 幻觉（本批 5/8 条中招）**
+
+01 循环乱码（avg_logprob −0.81）、02 全部 ≤ −3.79、03 zh/ko 混杂（−4.6）、
+08 zh/ko/en 乱跳、05 混着俄文 `только` 与「何贿」「傻」这类不连贯碎片。
+→ **`has_chinese_narration=true` 不可采信**（§14.2 的老结论本批再次被验证）。
+本批一律按"非旁白"处理：丢原轨 + 授权 BGM，这也同时是最稳的"清干净中文"策略（见 §3）。
+
+**BGM 曲库核对（做一次就够，务必做）**
+
+`music/sports/` 里 34 个 mp3 **只有 9 个**登记在 `configs/bgm-library.yaml`
+（Breaktime / Carefree / Cipher / Hitman(+v3) / Impact Moderato(+v4) / The Builder /
+The Path of the Goblin King / Wallpaper(+v2)）。
+**未登记的曲目（Crunk Knight / Heroic Age / Crusade / Ready Aim Fire …）一律不要用** ——
+"文件在本地"≠"已授权在册"。本批 8 条只用登记曲目，且同批不重复。
+
+**2026-09-28 追踪：本批遗留的三项（F1/F2/F3）落地结果**
+
+| 项 | 当时状态 | 现在 | 落点 |
+|---|---|---|---|
+| F1 `remove_original_bgm_only` 丢掉现场声 | 只做了语义澄清，标为"未实现的能力" | ✅ **新增 `duck_original_add_bgm`**（原声压低 −15dB + 叠 BGM），实跑验证两路都在；同时**更正**了"本机没有 demucs"的错误事实（demucs 4.0.1 已装，但它解决不了这个问题，别再走弯路） | **§3** |
+| F2 常驻叠字起点 > pad 就漏片头（通用隐患） | 只在文档里写了"必须写 0.0"，靠 Agent 记性 | ✅ **代码兜底**：`common.normalize_persistent_starts()` 唯一真源，plan 起草 / mask / 渲染**三处**调用；判据「片头 5s 内起 + 时长 ≥10s → 起点归零」，触发打 WARNING | **§4** |
+| F3 `cover` warning 不可消除 | 已写清验收标准 | ✅ 已落（本就是验收标准的定义，文档即实现） | §8.7 / §13.4 / `jobs/generate-cover.job.md` |
+
+**交付后返工：统一品牌色为 `#FFE800`（2026-09-27 晚）**
+
+用户看完真实渲染对比图定稿：「封面选 C（`#FFE800`）；**视频内 logo 不要保持白色，和封面
+保持一致**」。
+
+- 代码侧：`profiles/nba.yaml` 的 `fill_color` → `[255, 232, 0]`；`render_overlays.py` 新增
+  `resolve_accent()`（`--profile` / `--accent`），**logo / title / hook 三者统一取 accent**，
+  不再有 `WHITE`/`GOLD` 两处硬编码；**字幕仍为白色**。
+- 重跑范围由 plan 决定：**有 `watermark`/`title` 且带 `target_text` 的 6 条**
+  （02/03/04/05/06/07）重渲；**01（只有字幕）、08（只有清理项、无叠字）不动**。
+- 05 的 base 比 plan 旧（片头真中文 + 2 处误读框是后补的清理项），所以先 `patch_base.py`
+  局部修 base（3 个窗口 → 391 帧带 inpaint ≈ 6 分钟），再做全片 `--no-inpaint` 重渲。
+  修补后片头 24 帧 OCR **无 CJK** ✓（§13.9）。
+- 复核：封面 8/8 像素 `rgb(254,232,0)`（JPEG 偏差 1）；成片用 `chk_accent.py` 抽帧读像素，
+  不采信 QA 的 profile 值比对。
 
 ---
 
 ## 13. 执行效率（2026-09-22 复盘）
+
+> **本章速查（工程约束，先看这张表再去翻正文）**
+> | 你要做什么 | 看哪节 |
+> |---|---|
+> | 找中文（不许逐帧抽图） | §13.1 |
+> | 判"残留 vs 误读"、成品硬门禁 | §13.2 |
+> | 写 plan（脚本起草 + Agent 填语义 + `extra_items_file` + 长片字幕人工合并） | §13.3 |
+> | 脚本排查（已知 bug / 静默降级） | §13.4 |
+> | 长视频分段并行渲染 + 无字底片 | §13.4.3 |
+> | 一次跑几条、限线程（**最容易翻车的一节**） | §13.6 |
+> | 返工只重渲受影响段（关键帧对齐 + 流拷贝） | §13.7 |
+> | 沙箱 / 后台 / PATH / Pillow 中文 | §13.8 |
+> | 改叠字或品牌色（`clean-base` 快路径） | §13.9 |
+> | **排期与磁盘预算**（跑批前必看） | §13.10 |
+> | **批处理操作纪律**（失败复盘） | §13.11 |
 
 ### 13.0 结论先写在这
 
@@ -1181,8 +1686,29 @@ python scripts/render_overlays.py \
   五个文件先跑 `prepare_plan.py` 生成草稿（自动做区域合并/几何分类/时间范围/封面选帧/音频策略），
   Agent 只填 `target_text` / `headline` / `caption` / `hashtags` 这几个**语义字段**。
 - 草稿的 items 基于 OCR 结果（rapidocr 已可信），建议仍用 13.1 的接触印样交叉核对后落笔。
+- **草稿装不下的语义项，用 `extra_items_file` 注入，不要手改脚本**：
+  `prepare_plan.py` / 计划构建脚本支持 `extra_items_file`（一个 JSON，内容是 items 数组），
+  脚本把草稿与它合并。适用于"OCR 检不出但你知道该清/该画"的项（误读框、片头真中文、补画的 logo）。
+  （本批实现：`tiktok-batch/plan_builder.py`。）
 
-### 13.4 已知脚本 bug（2026-09-22 已修；2026-09-26 新增两条）
+**长片真人解说：字幕必须"人工合并"，别指望 OCR（2026-09-27 05 实录）**
+
+05 是 824s 的真人解说集锦，解说以**滚动字幕条**形式出现（每 1–3 秒换一次、位置固定）。
+把它当普通字幕处理会失败：OCR 每帧只能抓到当前那一小段，**切得极碎、句子被拦腰截断**，
+而且滚动中的字会被 OCR 拼成噪声。最终做法是：
+
+1. OCR 只用来**定位时间区间**（哪几秒有字幕条），不用它的文本；
+2. **整段滚动听/读一遍**（824s ≈ 14 分钟），人工合并成**完整句子**，
+   落成 **47 条 cue** 的 `translations/05.json`；
+3. 用 `plan_narration.py` 把 cue 转成 plan items（`category:"subtitle"`，
+   带上人工定的 `start_time`）。
+
+- 判据：**OCR 输出里同一行文字在连续帧上"逐渐变长/变短"** → 滚动字幕，走人工合并；
+  换成"整块出现、整块消失" → 普通字幕，OCR 直出即可。
+- 成本预期：长片这一遍人工合并是**必花的**，安排在 Job1 之后立刻做，
+  别等渲染完才发现字幕是碎的。
+
+### 13.4 已知脚本 bug（2026-09-22 已修；2026-09-26 / 09-27 / 09-28 各有新增）
 
 - `audio_processor.py` **adelay 输入索引错位**：多段 TTS 时滤镜引用了不存在的 `[2:a]`，直接崩。
   已改为按实际输入序号生成。
@@ -1239,6 +1765,43 @@ python scripts/render_overlays.py \
   `/var/folders/.../ttl-qa-residue-*` 抽帧、**全程不做任何删除**；交付 work-dir 也不再被污染。
   同类陷阱：任何"写一堆临时文件再批量删"的脚本在本环境都会踩这个钩子。
 
+- `render_overlays.py` **`SUBTITLE_CATEGORIES` 只认字面量 `"subtitle"`（2026-09-27 修复）**：
+  `spoken_subtitle` / `caption_overlay` 两类被**静默丢弃** → 所有口播字幕都不渲染，
+  而 plan / SRT 侧一切正常、只有画面缺字，极难发现。现改为
+  `SUBTITLE_CATEGORIES = ("subtitle", "spoken_subtitle", "caption_overlay")`。
+- **`tts_timing.py measure` 只测时长、不做合成（2026-09-27 踩坑）**：所以只调它的驱动脚本
+  会让 `mute_original_tts_bgm` **静默退化成"只有 BGM、没有旁白"**（成品听起来"正常"，只是没人说话）。
+  完整链路必须显式包含
+  `audio_processor.py tts --work-dir W --translated W/translated.json`。
+  通用教训：**凡是叫"measure/timing/mix"的脚本，先确认它是否负责生成音频再编排。**
+- `generate_post.py` **读不到 `work/post-content.json` 就静默套通用模板（2026-09-27 踩坑）**：
+  文案是**语义产物**，脚本里没有兜底素材，它的"兜底"就是一段与视频无关的通用英文模板
+  —— 出片后 `tiktok-post.md` 看着"格式完整、语法正确"，内容却和本条视频无关，
+  极易被当成"写好了"直接交付。**规则：交付前必读一遍 `tiktok-post.md` 正文**，
+  检查是否出现本条视频的具体人名/事件/比分；凡出现通用感叹句（"what a play!"类）即视为未生成。
+  本批 8 条全部由 Agent 手写 `work/post-content.json` 规避（见 §6 与 `jobs/generate-post.job.md`）。
+- `qa_video.py` 的 `render_subtitles --burn` **读到 0 字节 SRT 会让整条 QA 链判失败（A1 的连带）**：
+  当某条视频的英文是"直接画进画面"时，SRT 为空是**正确行为**，但 `--burn` 仍会调 ffmpeg
+  → `rc=1` → 整链标 FAIL（06 踩到）。**规则：SRT 为空 ⇒ 跳过 `--burn`，不要传空文件给 ffmpeg**；
+  该片的字幕验收改看画面（`render_overlays` 的叠字检查），不看 SRT 行数。
+  这也是"主流程 Job2 不再用 `--burn`"的第二个理由（第一个是 §12.11 的双重字幕）。
+- `prepare_plan.py` **品牌色写死字面量 `0xFFDC00`（2026-09-28 修复）**：
+  `build_items()` 给 title 的 `replacement.font_color` 硬编码了**旧黄**，而品牌色真源
+  2026-09-27 已改到 `profile.cover_style.fill_color`（nba 现为 `#FFE800`）——
+  于是草稿 plan 与 profile 不一致。**与 `cover_engine` 那次硬编码颜色是同一类 bug**
+  （文档/配置改了一处、实现里还留着旧值）。现改为：`build_items` 只写兜底常量
+  `DEFAULT_ACCENT_HEX`，`main()` 读 profile 真值覆盖，并打印
+  `[prepare_plan] brand accent = 0xFFE800 (from profile 'nba')` 供核对。
+  **凡"颜色/字号/比例"出现在两个地方，就是下一个 bug —— 一律只留 profile 一处。**
+- `qa_video.py` 的 cover 检查有一项 **`frame_cleaned_regions >= len(plan_items)` 计数比对**：
+  交付后若为清残留而**改了 plan**，封面仍是用**旧 plan** 渲染的 → 这项会**恒定 warning**
+  （`cover frame not cleaned per localization-plan`）。
+  这不是画面缺陷（实测这些封面 `chinese_residual` 全为 false），
+  但为让 `qa.json` 与交付物自洽，**改过 plan 后应重出一次封面**。
+  同类：`cover` 的 `face occluded by text` 对集锦封面**必然触发**，是**不可消除**的 warning ——
+  所以本类的质检等级**天花板就是 WARNING**，验收标准应是
+  **「`chinese_residue` PASS + 四件套齐全」**，而不是死等 PASS。
+
 ### 13.4.1 精修渲染：`render_overlays.py`（2026-09-26 新增）
 
 **何时用**：用户反馈"字幕像 AI 加的 / 很花 / 字体难看"，或视频存在**相邻字幕窗口重叠**、
@@ -1292,7 +1855,9 @@ python scripts/render_overlays.py \
    `ffmpeg -fflags +genpts -f concat -safe 0 -i list.txt -c copy` 拼接。
    切片安全的前提是渲染器用**全局帧号**算时间（`t = idx/fps`，`--start-time` 只跳帧、
    不重置 `idx`），因此 masks 与字幕窗口在每段里都自然对齐。
-   实测 **5 段并行把 45 分钟压到约 13 分钟**。段边界取整帧（`start_frame / fps`），
+   实测 **5 段并行把 45 分钟压到约 13 分钟**。
+   ⚠️ **但并行度有硬上限**：一次只跑一条链、每段加 `--x264-threads 1`（本批实测 4 链同跑把
+   load 打到 230 并触发 OOM，见 **13.6**）。段边界取整帧（`start_frame / fps`），
    `--max-frames` 是「跳过后写出的帧数」，所以段 i 覆盖 `[start_frame, start_frame+n)`。
 2. **`--save-clean-base <path>`**：在同一次渲染里顺手把 inpaint 后的**无字底片**导出。
    以后**只改字幕文案**时用 `--video <base> --no-inpaint` 重跑，约 2 分钟出片，
@@ -1340,6 +1905,148 @@ PY=/Users/jason/opt/miniconda3/bin/python             # 必须用 conda：cv2/PI
 - **OCR**：`rapidocr_onnxruntime`（唯一默认引擎，初始化约 2.6s）。`paddleocr 2.7.3` 与
   `tesseract` 仅为显式排障选项，正常流程不用。三者在沙箱内**均可运行**（paddleocr 只是
   初始化慢约 5 倍，故不作默认）。相关类库 onnxruntime、paddlepaddle 2.2.2 已在本机 conda 环境内。
+
+### 13.6 并发上限：本批最大的时间黑洞（2026-09-27）
+
+**现场**：4 条链同时渲染，每链 `render_parallel` 切 3–4 段、每段**两个**编码器
+（`seg_XX.mp4` + `--save-clean-base` 的 `base_XX.mp4`），合计 **24 个 libx264**，再加 8 个
+OpenCV 进程 → `uptime` 的 load average 冲到 **230**（5 分钟均值 309），`vm_stat` 的
+`Pages free` 掉到 **28MB**，`generate_cover.py` 连续两次 `Exit 137` 且**一行日志都没输出**
+就被杀。改成"一次只跑一条 + 限线程"后 load 稳定在 **9–40**，再无 OOM。
+
+**规则**：
+
+1. **一次只跑一条链**（`serial_run.py` 模式：链间串行、链内 3–4 段并行）。
+   不要"每条链各开 3–4 段"地叠乘 —— 编码器总数 = 链数 × 段数 × 2。
+2. **每段加 `--x264-threads 1`**（`render_parallel` 可透传）。
+   默认 `--threads 0` = 每段吃满全核，段数一多就互相踩。
+3. **OpenCV 侧无法限流**：本机 conda 的 OpenCV 报 `Parallel framework: GCD`，
+   `cv2.setNumThreads()` **被忽略**（请求 1/2/4 线程，`getNumThreads()` 恒返回 8）；
+   实测 `cv2.inpaint` 在 1080×1920 上 1/2/4/8 线程**都是 ~0.30s/帧** —— 它本来就是单线程的。
+   所以别指望 `LOCALIZER_CV_THREADS` 救场（该开关已加，但只对 OpenMP/TBB 构建生效）。
+4. **段数不是越多越好**：`8 核 / 每段 2 个编码器` 时 4 段已到顶。
+5. 判断"渲染在不在推进"看**输出文件是否在长大**（`stat -f%z`）——
+   `ps`/`top`/`sar` 在沙箱里是 `operation not permitted`，`pgrep` 也不能看进度。
+
+### 13.7 返工时只重渲受影响的段（关键帧对齐 + 流拷贝，2026-09-27）
+
+**场景**：交付后 QA 报出的残留 / 改字只落在**某一个分段**里（常见于 1s 窗口的清理项）。
+
+```
+1. 重建 plan（新增清理项）→ 删 masks-index.json / timeline.json 让缓存失效
+2. 只重渲受影响段：  render_parallel.py … --reuse
+   （已存在且帧数正确的 seg_XX.mp4 直接参与 concat，不重渲）
+3. 若缺陷只影响**片头**，还能更省：只重编 [0, K) 帧
+   （K = 缺陷窗口之后**第一个关键帧**的帧号），其余 ffmpeg -ss <K/fps> -c copy 切尾 +
+   concat -c copy 拼接 —— 纯流拷贝，尾部逐位复制、零画质损失。
+```
+
+- ⚠️ **复用段的前提**：新旧 plan 里**旧 item 逐字段完全一致**
+  （`item_id`/`category`/`action`/`bbox`/`start_time`/`end_time`/`target_text`/`source_text`），
+  只多出新的清理项。改过旧条目就不能复用。
+- ⚠️ **渲染不受 pad 影响**：`render_parallel` 不传 `--pad-head/--pad-tail`，复用段不必关心 pad 差异
+  （pad 只写进 timeline 供 SRT/QA 用）。
+- ⚠️ **关键帧不一定是固定网格**：x264 按 scenecut 插 IDR。务必实测
+  `ffprobe -select_streams v:0 -show_entries packet=pts_time,flags -of csv=p=0`
+  （流式读、命中即 kill，别等它扫完整个文件）。
+- ⚠️ **被中断的段必须先删**：`--reuse` 只看"文件存在"，会**静默复用截断的坏段**拼出错位成片。
+  判据：`mtime >= 中断时刻` 即半成品。注意本环境**删文件可以、删目录会被拦**（见 13.8）。
+- ⚠️ **拼接必须逐位校验**：抽拼接点帧算 SHA256 与旧版比对，必须一致；再校验总帧数与时长
+  （偏差 >0.6s 即中止）。任一不过 → **自动回退整段重渲**，不要硬着头皮交付。
+- **实测收益**：04 从 ~42 分钟 → ~11 分钟；02 从 ~9.5 分钟 → ~2.5 分钟；
+  05（6178 帧首段）从 ~50 分钟 → **110 秒**。
+- 通用实现已沉淀为独立 skill `~/.workbuddy/skills/video-window-patch/`（`window_patch.py`，
+  校验不过则非零退出且不产出 `--out`，调用方可无脑回退）。
+
+### 13.8 沙箱与后台：本批再次踩到的四条
+
+1. **`nohup … &` 活不过一轮对话**（§13.4 已记，本批再次验证）：第一版收尾守护就是这样死的，
+   06 的 QA 跑到一半被打断。**一律用 Bash 工具的 `run_in_background`**。
+2. **`~/Downloads` 下的目录删不掉**：`[safe-delete] broker denied delete`
+   （`os.walk` + `os.rmdir` 同样被拦）；但 `os.remove()` **删文件是允许的**。
+   清理 work 中间件时只删文件、别删目录，也别指望能删掉误建的空目录。
+3. **PATH 必须在 import 之前铺好**：脚本 `require_tools("ffmpeg")` 会硬失败，
+   现象是 `exited with code 2` + `Missing required deterministic tools: ['ffmpeg','ffprobe']`。
+   自写的收尾脚本要在 **import 之前**写：
+   `os.environ["PATH"] = "/Users/jason/opt/miniconda3/bin:" + os.path.expanduser("~/.local/bin") + ":" + os.environ.get("PATH","")`。
+4. **Pillow 画不了中文**：`ImageDraw.text()` 用 latin-1 编码，传中文直接 `UnicodeEncodeError`。
+   给**中文视频做核对图/接触印样/bbox 标注**时，图上的说明文字**一律用 ASCII**
+   （时间戳、`UPPER TITLE`、`watermark #3`、`bbox 512,88,980,210`），
+   需要中文就往画面里塞**裁切出来的原图块**，不要在图上"写"中文。
+   本批所有核对脚本（`chk_accent.py` / `cmp_colors.py` / 对比图）都遵守这条。
+
+### 13.9 改叠字/改品牌色：用 `clean-base` 快速重渲（2026-09-27 晚）
+
+**场景**：交付后要改**叠字层**（logo/标题颜色、文案），画面清理不变。
+
+```
+1. 用无字底片重渲（跳过 inpaint）：
+   render_parallel.py --video <work>/clean-base.mp4 --work-dir <work> \
+       --output <work>/final_recolor.mp4 --segments <N> \
+       --no-inpaint --profile nba --threads 1
+2. 重新混音（-c:v copy，秒级）：
+   audio_processor.py mix --video <上一步输出> --work-dir <work> --output-dir <out> \
+       --audio-plan <work>/audio-plan.json --timeline <work>/timeline.json
+```
+
+- **为什么快**：`--no-inpaint` 省掉 `cv2.inpaint`（1080×1920 ≈ **0.30s/帧**，单帧成本的
+  大头）。实测 **1280×960 → 17.6 fps/进程**（1306 帧 74s），1080×1920 ≈ 10 fps/进程；
+  对照同样尺寸**带 inpaint 实测 2.6s/帧**（58 帧花 150s）—— 差 **25 倍以上**。
+- ⚠️ **前提：base 必须比 plan 新**。`clean-base.mp4` 只是"生成它的那一刻"的 plan/masks 的
+  产物；之后补进来的清理项（片头真中文、OCR 误读框）**不在里面**，拿旧 base 重渲会把中文
+  带回来。判据：比较 `clean-base.mp4` 与 `localization-plan.json` 的 mtime。
+- **base 落后时：局部修 base，别全片带 inpaint 重渲**。按受影响时间窗向外扩到**关键帧**
+  边界，只重渲这几段 base（`--save-clean-base`），再与旧 base **无损拼接**，最后全片
+  `--no-inpaint` 重渲一次。本批实现：`tiktok-batch/patch_base.py`
+  （`--tag 05 --windows 0,1.0 172.4,175.6 421.4,422.6`）。
+  - ⚠️ **切段用精确帧数，不要用 `-t 时长`**：30fps 下 `-t` 的边界舍入会让每段多 1~2 帧，
+    几段拼起来时间轴就漂（第一版 24714 vs 24710）。用
+    `round(t1*fps) - round(t0*fps)` + `-frames:v N`，并断言拼接后总帧数不变。
+  - ⚠️ **别用 `ffprobe -count_frames` 数帧**：800MB 的片会被整片解码，本机 load 高时
+    直接 `Exit 137`。优先读容器元数据 `stream=nb_frames`。
+- ⚠️ **不是每条都有 logo/标题**：只有 plan 里存在 `category=watermark`（或 `title`）**且带
+  `target_text`** 的条目才画。本批 01（只有字幕）、08（只有清理项）→ **无需重渲**。
+  先扫 plan 再决定范围，别默认全量重跑。
+- **颜色只有一个真源**：`--profile nba` → `cover_style.fill_color`。改色 = 改 profile 一处，
+  然后「重出封面（`cover_engine`）+ 重渲叠字（`render_overlays`）」两步；改完务必用
+  `chk_accent` 类的脚本**读真实像素**复核（QA 只校对 profile，不读像素）。
+
+### 13.10 长批次的时间与磁盘预算（2026-09-27）
+
+**排期不要按"条数"估，要按"条数 × 片长"估。** 本批 8 条（50s–824s，合计约 43 分钟 /
+5.5 万帧）的实测：
+
+| 项 | 事实 |
+|---|---|
+| Job1（probe + OCR + ASR） | 累计约 **8 小时** CPU，最长一条 **05 = 154 分钟**（824s / 2.4 万帧，OCR dense pass 是大头）。**这部分不可压缩**，只能提前开跑 |
+| Job2/3（清理 + 渲染 + 封面） | 单条约 10–40 分钟，**可优化**（见 §13.4.3 / §13.6 / §13.7 / §13.9） |
+| 单条 work 体积 | 05 ≈ **2.3 GB**（masks + 分段 + 无字底 + 中间 mp4 各留一份） |
+
+- ⚠️ **`asr.json` / `ocr.json` 只在最后一次性落盘**：Job1 跑完才写文件，中途中断 = 整条白跑
+  （本批 05 的 154 分钟就是这么丢过一次）。**长片要单独一条一个进程跑并及时检查产物**，
+  不要一条命令串完 8 条。
+- ⚠️ **跑批前先看磁盘**：本批 `/System/Volumes/Data` 已用 **428Gi / 466Gi（97%）**，
+  可用仅 **15Gi** —— 两条长片的中间件就能把它吃光，随后 `generate_cover.py` 被 OOM 杀
+  （Exit 137，无日志，见 §13.6）。**每条交付完立刻清 work 里的大件**
+  （`clean-base*.mp4` / `base_XX.mp4` / `seg_XX.mp4` / `masks/`），只留
+  `localization-plan.json` / `qa.json` / 四件套 + `work/*.json` 契约。清理注意 §13.8 条第 2 点：
+  **只删文件，别删目录**。
+
+### 13.11 批处理操作纪律（2026-09-27 失误复盘）
+
+本批的"翻车"有一半不是脚本缺陷，是**操作**，逐条固化为纪律：
+
+| # | 失误 | 纪律 |
+|---|---|---|
+| 1 | **并发开太多**（4 条链同跑）→ load 230、白等 ~40 分钟、2 次 OOM | 一次只跑一条链；上限与推导见 **§13.6** |
+| 2 | **手敲中文路径传源视频**（06 的全角冒号/省略号被 zsh 改写）→ `cv2` 报错 + `ZeroDivisionError` | 中文路径**一律从文件按下标取**，不要手敲：`tiktok-batch/pathof.py <index> <N>`；脚本内部也别自己拼中文名，读 `index.json` |
+| 3 | 误建 `Downloads/tiktok/tiktok/` 空目录 | 输出目录**先推导再创建**；空目录在本环境删不掉（§13.8 条第 2 点），只能让用户 `rmdir` |
+| 4 | **误判 05 的 ASR"被中断"** —— 实际是 `grep` 过滤把 `job1.py` 自身排除了，日志看着像断了 | **过滤前先看全**：先 `tail` 完整日志确认状态，再用过滤条件做二次确认；别让一条 grep 决定"要不要重跑 154 分钟" |
+| 5 | `fix05fast.ocr_head` 阈值写成 `cjk >= 1` → 单字 `吧`(conf 0.715) 被当成残留 → **误触发全量重渲** | 判定阈值**直接引用 §1/§12.11 的结论：`cjk >= 2`**，不要在一次性脚本里重新定义阈值；一次性脚本里凡是"要不要重跑大工程"的判据，必须和主流程同源 |
+| 6 | 收尾脚本 `finish.py` 报 `code 2`，真因只是 PATH 缺 `ffmpeg` | 自写脚本 import **之前**铺 PATH（§13.8 条第 3 点），别一看到报错就怀疑逻辑 |
+
+> 通用形态：**1、2、5 都是"看起来在省时间，实际最贵"的决定**（并发省的是别人的 CPU、
+> 手敲省的是 3 秒、阈值放宽省的是排队）。凡是要重跑几十分钟的判据，一律按"宁可多验一次"写。
 
 ---
 

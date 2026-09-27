@@ -328,14 +328,15 @@ def check_cover(output_dir: str, work_dir: str) -> Dict:
     if not ocr_available:
         warnings.append("RapidOCR 不可用，封面中文残留检查被跳过 —— 这**不代表**封面没有中文")
 
-    # 标题颜色校验（TikTok 经典亮黄色 #FFDC00，禁止白色或其他颜色）
+    # 标题颜色校验（品牌黄，取值来自 profile.cover_style.fill_color；禁止白色/黑白）
     profile_style = cover_plan.get("profile_cover_style", {})
     fill_color = profile_style.get("fill_color", [255, 220, 0])
     fill_r, fill_g, fill_b = fill_color[0], fill_color[1], fill_color[2]
     # 黄色判定：R>=230, G>=180, B<=80，且 G > B（排除白色/黑白）
     color_ok = fill_r >= 230 and fill_g >= 180 and fill_b <= 80 and fill_g > fill_b
     if not color_ok:
-        log.warning(f"Cover fill_color is not TikTok yellow: {fill_color} (expected ~[255,220,0])")
+        log.warning(f"Cover fill_color is not a brand yellow: {fill_color} "
+                    f"(need R>=230, G>=180, B<=80, G>B)")
 
     # 品牌署名校验（profile 配置了 brand_text 就必须渲染）
     brand_text = profile_style.get("brand_text")

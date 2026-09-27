@@ -9,9 +9,9 @@
 - **画面清理**：中文字幕移除+背景修复、水印清除、Logo 替换（contain 保持宽高比，禁止拉伸）
 - **音频本地化**：有中文旁白→静音原轨+英文TTS+BGM；无旁白→保留原声
 - **时间轴对齐**：原视频时间轴为主约束，TTS 时长为调整依据，支持缩译/拆句/playback_rate 调整
-- **字幕渲染**：英文字幕 SRT + 烧录，样式可配置
+- **字幕渲染**：英文字幕 SRT（**只出 SRT，禁止烧录** —— TikTok 端上传自己的字幕）
 - **封面生成**：Profile 驱动，1080×1920，人脸/主体保护，安全文字区
-- **发布文案**：八段结构 tiktok-post.md（Caption/Hashtag/Pinned Comment/BGM推荐/Cover/处理结果）
+- **发布文案**：九段结构 tiktok-post.md（Summary/Caption+署名/Hashtag/Pinned Comment/BGM推荐/发布时间/Cover/处理结果/文件清单）
 - **质量检查**：五类检查 + 残留中文抽检 + 水印复检 + Logo 可见性 + 降级汇总
 - **Confidence 三档**：≥0.85 自动 / 0.60-0.85 执行+WARNING / <0.60 进入 review，宁可保留不误删
 
@@ -101,10 +101,14 @@ tiktok-video-localizer/
 │   ├── generate_masks.py     # 根据 plan 生成时序 mask
 │   ├── clean_video.py        # 清理：crop→clone→OpenCV inpaint；Logo replace 贴图
 │   ├── tts_timing.py         # TTS 测长→比对→执行调整方案（measure/apply 双子命令）
-│   ├── audio_processor.py    # ASR/TTS/混音（asr-only/tts/mix 三模式）
-│   ├── render_subtitles.py   # SRT 生成 + 烧录
+│   ├── audio_processor.py    # ASR/TTS/混音（asr-only/tts/mix 三模式）+ BGM 节奏对齐
+│   ├── analyze_rhythm.py     # 量视频节奏（场景切换+运动强度）→ rhythm.json
+│   ├── analyze_bgm.py        # 量 BGM（实测 BPM/能量曲线/drop）→ bgm-plan.json
+│   ├── analyze_narration.py  # 量原解说声学风格（F0/语速/能量）→ narration-style.json
+│   ├── bgm_ledger.py         # 曲库台账：resolve(选曲) / audit / pick / add / record / seed
+│   ├── render_subtitles.py   # SRT 生成（只出 SRT，**禁止烧录**）
 │   ├── generate_cover.py     # Profile 驱动封面渲染
-│   ├── generate_post.py      # 八段 tiktok-post.md 拼装
+│   ├── generate_post.py      # 九段 tiktok-post.md 拼装（含 BGM 署名行）
 │   └── qa_video.py           # 五类检查 + 残留中文抽检 + 降级汇总
 ├── prompts/                  # 智能任务契约（Agent 用自身能力填充）
 │   ├── video_understanding.md
@@ -122,16 +126,20 @@ tiktok-video-localizer/
 │   ├── sports.yaml
 │   └── generic.yaml
 ├── templates/                # 输出格式模板
-│   ├── tiktok-post.md        # 八段结构
+│   ├── tiktok-post.md        # 九段结构
 │   ├── cover-defaults.json   # 封面引擎默认值（被 profile 覆盖）
 │   └── subtitle-style.json   # 字幕样式默认值
 ├── configs/                  # 全局配置
 │   ├── default.yaml          # 采样/confidence/timing/audio/qa 默认值
-│   └── providers.yaml        # AI 能力 fallback 链 + 确定性工具清单
-├── music/                    # 可选本地 BGM 曲库（用户自备，Skill 不下载）
+│   ├── providers.yaml        # AI 能力 fallback 链 + 确定性工具清单
+│   ├── bgm-library.yaml      # 人工曲库主干（只读；含授权分层警告）
+│   ├── bgm-bpm-measured.json # 实测 BPM 库（登记值 8/8 全错，勿用）
+│   ├── bgm-usage.json        # BGM 使用台账（按歌曲计数 → 防复用）
+│   └── bgm-library-added.json# 自动入册的新曲目（resolve/add 写入）
+├── music/                    # 本地 BGM 曲库（**可增长**：resolve 判需下载时 add 入册）
 │   ├── epic/
 │   ├── cinematic/
-│   ├── sports/
+│   ├── sports/               # 当前实际使用；34 文件 = 24 首歌
 │   └── motivational/
 ├── tests/                    # 6 个测试 Case
 │   ├── case1_chinese_narration/
@@ -163,15 +171,16 @@ tiktok-video-localizer/
 - 时间轴以 timeline.json 为准（原视频时间轴主约束）
 
 ### tiktok-post.md
-八段结构：
-1. 视频内容简介（主题+简介）
-2. TikTok Caption
-3. 话题标签（≤5个）
-4. 推荐置顶评论
-5. 推荐背景音乐（首选+3备选，标注 Licensing）
-6. 视频封面（文案+设计说明）
-7. 视频处理结果（如实披露降级/低置信度/未解决项）
-8. 最终文件清单
+九段结构（顺序以 `generate_post.py::render_markdown` 为准）：
+1. Video Summary（主题+简介）
+2. TikTok Caption（**紧随 CC BY 署名行**，由脚本自动生成）
+3. Hashtags（≤5 个）
+4. Pinned Comment
+5. BGM Recommendations（首选+3备选，标注 Licensing）
+6. Posting Time（北京时间 + 美东/美西）
+7. Video Cover（文案+设计说明）
+8. Processing Report（如实披露降级/低置信度/未解决项）
+9. Final Files（四件套清单）
 
 ## 脚本退出码约定
 

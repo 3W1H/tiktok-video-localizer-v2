@@ -51,6 +51,9 @@ python scripts/generate_cover.py --work-dir work --output-dir output --profile {
 ```
 - 样式全部取自 `profile.cover_style`（`font_chain` 字体、`font_size` 主标题、
   `brand_size` 品牌、`fill_color` 颜色、`safe_zone_*_pct` 安全区、`picture_mode`）
+  ⚠️ **`fill_color` 必须被真正用于绘制，不得在 `cover_engine.py` 里硬编码颜色**。
+  2026-09-27 修过一个 bug：主标题 / 数据行 / 品牌署名原本全画在模块级 `GOLD=(255,208,0)`，
+  profile 的 `fill_color` 只进了 meta —— **QA 读 profile 永远通过，实际像素却比规格暗一档**。
 - **帧清理**：按 localization-plan 的 remove/translate 项，大区域高斯模糊+黑遮罩、
   小区域 OpenCV inpaint；封面比视频清得更重（放大后才不会露出中文）
 - **排版**：主标题 / 数据行 / 品牌署名**全部落在安全区**
@@ -72,7 +75,11 @@ python scripts/generate_cover.py --work-dir work --output-dir output --profile {
 - Cover Style 属于 Profile，不写死模板
 - 新增垂类（NFL/Soccer/Motivation）只需加 YAML，`cover_engine.py` 零改动
 - 默认 1080×1920，9:16
-- NBA profile 定稿值：Impact 127px 主标题 / Impact 64px 品牌 / 黄 #FFDC00 /
+- NBA profile 定稿值：Impact 127px 主标题 / Impact 64px 品牌 / 品牌黄 #FFE800（`fill_color`）/
   安全区 0.22-0.22 / 画面 `fill`
 - 两个封面入口（`generate_cover.py` 流水线、`make_cover.py` 手工）必须同源，
   改渲染逻辑只改 `cover_engine.py`
+- ⚠️ **改过 `localization-plan.json` 之后要重出一次封面**：`qa_video.py::check_cover` 有一项
+  `frame_cleaned_regions >= len(plan_items)` 的计数比对，用旧 plan 渲染的封面会**恒定 warning**
+  （不是画面缺陷，是计数不符）。同理 `face occluded by text` 对集锦封面**必然触发** ——
+  封面类的质检等级**天花板就是 WARNING**，验收看 `chinese_residue` 通过 + 四件套齐全。

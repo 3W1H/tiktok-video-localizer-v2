@@ -235,8 +235,8 @@ python scripts/generate_cover.py --work-dir work --output-dir output --profile n
 ```bash
 python scripts/generate_post.py --work-dir work --output-dir output --profile nba
 ```
-- 八段结构 Markdown
-- 第七段如实披露降级/低置信度/未解决项
+- 九段结构 Markdown
+- 第八段如实披露降级/低置信度/未解决项
 - 输出：`output/tiktok-post.md`
 
 ## QA
@@ -260,5 +260,5 @@ output/
 ├── final.mp4           # 最终英文视频
 ├── cover.jpg           # TikTok 封面（1080×1920）
 ├── subtitles-en.srt    # 英文字幕
-└── tiktok-post.md      # 发布方案（八段 Markdown）
+└── tiktok-post.md      # 发布方案（九段 Markdown，含 BGM 署名行）
 ```

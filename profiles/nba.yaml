@@ -43,8 +43,12 @@ cover_style:
   contrast_boost: true
   headline_max_words: 5
   headline_min_words: 3
-  # ⚠️ TikTok 经典亮黄色 #FFDC00，禁止改为白色或其他颜色（QA 会校验）
-  fill_color: [255, 220, 0]
+  # 2026-09-27 用户定稿（对比图 cmp/cmp_cover_yellow.png 选 C 档）：
+  # #FFE800 = rgb(255,232,0)，比 TikTok 官方 #FFDC00 再亮一档 —— 用户嫌
+  # #FFDC00 出图偏暗。改动此处即同时改「封面 + 视频内 title/hook/logo」，
+  # 因为 render_overlays.py 也从这个字段取色（--profile nba）。
+  # ⚠️ 不要再在脚本里硬编码黄色；QA 会校验出图像素与这里一致。
+  fill_color: [255, 232, 0]
   stroke_color: [0, 0, 0]
   stroke_width: 6
   # 品牌署名描边：截图实测约 3px @1080，明显细于主标题（不要套用 8）

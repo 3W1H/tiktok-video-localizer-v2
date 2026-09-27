@@ -20,9 +20,37 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from clean_video import find_font, probe_color_args  # noqa: E402
+from common import (  # noqa: E402
+    get_logger,
+    normalize_persistent_starts,
+    log_persistent_snaps,
+    HEAD_SNAP_SEC,
+    PERSISTENT_MIN_SEC,
+)
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
 from PIL import Image, ImageDraw, ImageFont  # noqa: E402
+
+log = get_logger()
+
+# Optional per-process OpenCV thread cap.
+#
+# NOT the load fix on this machine. The conda build reports
+# "Parallel framework: GCD", and cv2.setNumThreads() is ignored by that backend:
+# getNumThreads() stays at the core count no matter what is requested. Measured
+# 2026-09-27 -- cv2.inpaint on a 1080x1920 frame takes ~0.30s at 1, 2, 4 and 8
+# requested threads, i.e. inpaint here is effectively single-threaded.
+#
+# So the OpenCV side cannot be throttled; the fix for the 2026-09-27 load spike
+# (load average 230+ with 12 parallel render segments) is fewer segments on the
+# renderer plus --x264-threads on the ffmpeg side, not this knob. Kept because
+# it is a no-op when unset and does take effect on OpenMP/TBB builds.
+_cv_threads = os.environ.get("LOCALIZER_CV_THREADS")
+if _cv_threads:
+    try:
+        cv2.setNumThreads(max(1, int(_cv_threads)))
+    except (TypeError, ValueError):
+        pass
 
 FFMPEG = shutil.which("ffmpeg") or os.path.expanduser("~/.local/bin/ffmpeg")
 
@@ -32,9 +60,22 @@ BOLD_CANDIDATES = [
     "/Library/Fonts/Arial Unicode.ttf",
 ]
 
-GOLD = (255, 215, 0)
+GOLD = (255, 215, 0)   # fallback brand yellow (only when no --accent/--profile)
 WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
+
+# Brand colour = ONE value shared by cover and in-video marks.
+#
+# 2026-09-27: the brand mark ("logo") was hard-coded WHITE here while the cover
+# drew the profile's yellow -> the delivered videos had a white wordmark over a
+# yellow cover. User's call: "video logo must match the cover". So title, hook
+# and logo now all take `accent`, and `accent` is resolved from the SAME
+# profile field the cover uses (`cover_style.fill_color`) via --profile, with
+# --accent as an explicit override.
+#
+# Subtitles stay WHITE on purpose: spoken subtitles are not brand marks, and
+# white-on-video is what every platform caption style uses.
+ACCENT = GOLD
 
 ROI_PAD = 16  # context pixels around a mask box before inpainting that ROI
 
@@ -50,6 +91,18 @@ PAD_TAIL = 0.35
 # same on 720/1080/1280-wide videos. 0.32 keeps it above the >=30% floor from
 # SKILL.md 12.5 while staying "a bit bigger, not huge" (2026-09-27 feedback:
 # the old 17/20px text was ~20% of the width and read as too small).
+# Category names that mean "timed on-screen text" (see §1 5-action model /
+# prompts/classify_text.md). All spellings must be accepted -- matching only
+# the literal "subtitle" silently dropped every spoken subtitle from the
+# render. Fixed 2026-09-27.
+SUBTITLE_CATEGORIES = ("subtitle", "spoken_subtitle", "caption_overlay")
+
+# Persistent head-overlay normalisation (title/slogan/watermark start snapped to
+# 0.0 when they cover the head) lives in `common.py` -- one source of truth for
+# prepare_plan.py (plan draft) / generate_masks.py (inpaint window) / this file
+# (draw window). See `normalize_persistent_starts` there for the 2026-09-27
+# incident it prevents.
+
 LOGO_RATIO = 0.32       # target text width / frame width
 LOGO_STROKE = 4
 LOGO_MIN_SIZE = 12
@@ -157,14 +210,59 @@ def draw_centered(draw, text, font, cy, img_w, fill, stroke_w=5,
               stroke_width=stroke_w, stroke_fill=col(stroke_fill))
 
 
+def resolve_accent(accent_str="", profile=""):
+    """Brand yellow for title / hook / logo -- same source as the cover colour.
+
+    Priority: ``--accent "R,G,B"`` > ``--profile``'s ``cover_style.fill_color``
+    > ``GOLD``. Pass ``--profile nba`` (name or path) so the in-video marks and
+    the cover can never drift apart again; that drift is exactly what shipped
+    white logos over yellow covers on 2026-09-27.
+    """
+    if accent_str:
+        parts = [p.strip() for p in accent_str.replace(";", ",").split(",")]
+        if len(parts) != 3 or not all(parts):
+            raise SystemExit(f"--accent needs 'R,G,B' (got {accent_str!r})")
+        return tuple(max(0, min(255, int(float(p)))) for p in parts)
+
+    if profile:
+        path = profile
+        if not os.path.exists(path):
+            path = os.path.join(os.path.dirname(os.path.dirname(
+                os.path.abspath(__file__))), "profiles", f"{profile}.yaml")
+        if not os.path.exists(path):
+            raise SystemExit(f"--profile not found: {profile}")
+        try:
+            import yaml
+        except ImportError:
+            raise SystemExit("PyYAML required for --profile (pip install pyyaml)")
+        data = yaml.safe_load(open(path, encoding="utf-8")) or {}
+        col = (data.get("cover_style") or {}).get("fill_color") or []
+        if len(col) != 3:
+            raise SystemExit(f"{path}: cover_style.fill_color missing or invalid")
+        return tuple(int(c) for c in col)
+
+    print(f"!! no --profile/--accent: brand colour falls back to GOLD {GOLD} "
+          f"and may not match the cover. Pass --profile <name>.")
+    return GOLD
+
+
 def build_overlays(plan, frame_w, frame_h, font_path, hook_seconds=3.4,
                    logo_text=None, logo_ratio=LOGO_RATIO, logo_y=None,
-                   draw_logo=True, pad_head=PAD_HEAD, pad_tail=PAD_TAIL):
+                   draw_logo=True, pad_head=PAD_HEAD, pad_tail=PAD_TAIL,
+                   accent=GOLD, head_snap=HEAD_SNAP_SEC,
+                   persistent_min_sec=PERSISTENT_MIN_SEC):
     """Translate plan items into timed draw instructions.
 
     The source watermark slot is reused for the channel brand mark (logo),
     sized as logo_ratio x frame width so every video in the series matches.
     """
+    # Safety net: force head-covering persistent overlays to start at 0.0, so a
+    # hand-written plan with start_time=1.0 can not leave the opening frames
+    # uncleaned (see common.normalize_persistent_starts).
+    log_persistent_snaps(
+        normalize_persistent_starts(plan, head_snap, persistent_min_sec),
+        "render_overlays")
+
     items = plan.get("items", [])
     for n, it in enumerate(items):
         it["_index"] = n
@@ -194,7 +292,13 @@ def build_overlays(plan, frame_w, frame_h, font_path, hook_seconds=3.4,
                 titles.append({"text": text, "cy": cy, "a": start, "b": end})
             else:
                 hooks.append({"text": text, "cy": cy, "a": start, "b": hook_seconds})
-        elif cat == "subtitle":
+        elif cat in SUBTITLE_CATEGORIES:
+            # The classification prompt (prompts/classify_text.md) names the
+            # spoken-subtitle category `spoken_subtitle`, while older plans in
+            # this repo used `subtitle`. Accept both -- matching only the
+            # literal "subtitle" silently dropped every spoken subtitle from
+            # the render (mask still inpainted the Chinese away, so the hole was
+            # left bare). Fixed 2026-09-27.
             subs.append({"text": text, "cy": cy, "a": start, "b": end,
                          "plan_index": it.get("_index")})
 
@@ -209,12 +313,12 @@ def build_overlays(plan, frame_w, frame_h, font_path, hook_seconds=3.4,
     for t in titles:
         f, s = fit_font(font_path, t["text"], 36, max_w)
         out.append({"text": t["text"], "cy": t["cy"], "a": t["a"], "b": t["b"],
-                    "font": f, "size": s, "fill": GOLD, "stroke": 4, "shadow": True,
+                    "font": f, "size": s, "fill": accent, "stroke": 4, "shadow": True,
                     "alpha": 255, "kind": "title"})
     for h in hooks:
         f, s = fit_font(font_path, h["text"], 32, max_w)
         out.append({"text": h["text"], "cy": h["cy"], "a": h["a"], "b": h["b"],
-                    "font": f, "size": s, "fill": GOLD, "stroke": 4, "shadow": True,
+                    "font": f, "size": s, "fill": accent, "stroke": 4, "shadow": True,
                     "alpha": 255, "kind": "hook"})
     for sb in subs:
         f, s = fit_font(font_path, sb["text"], 40, max_w)
@@ -232,7 +336,7 @@ def build_overlays(plan, frame_w, frame_h, font_path, hook_seconds=3.4,
             seen.add(key)
             f, s = fit_width(font_path, lg["text"], logo_ratio * frame_w)
             out.append({"text": lg["text"], "cy": lg["cy"], "a": lg["a"],
-                        "b": lg["b"], "font": f, "size": s, "fill": WHITE,
+                        "b": lg["b"], "font": f, "size": s, "fill": accent,
                         "stroke": LOGO_STROKE, "shadow": True, "alpha": 255,
                         "kind": "logo"})
         if not logos and logo_text:
@@ -240,7 +344,7 @@ def build_overlays(plan, frame_w, frame_h, font_path, hook_seconds=3.4,
             cy = logo_y if logo_y is not None else frame_h * 0.66
             f, s = fit_width(font_path, logo_text, logo_ratio * frame_w)
             out.append({"text": logo_text, "cy": cy, "a": 0.0, "b": 9e9,
-                        "font": f, "size": s, "fill": WHITE,
+                        "font": f, "size": s, "fill": accent,
                         "stroke": LOGO_STROKE, "shadow": True, "alpha": 255,
                         "kind": "logo"})
 
@@ -293,6 +397,12 @@ def main():
                     help=f"brand mark width / frame width (default {LOGO_RATIO})")
     ap.add_argument("--logo-y", type=float, default=None,
                     help="brand mark vertical CENTER in px (default: watermark bbox center)")
+    ap.add_argument("--accent", default="",
+                    help="brand yellow 'R,G,B' for title/hook/logo; wins over --profile")
+    ap.add_argument("--profile", default="",
+                    help="profile name (nba/sports/generic) or yaml path; its "
+                         "cover_style.fill_color becomes the brand yellow so the "
+                         "in-video marks and the cover can never drift apart")
     ap.add_argument("--no-logo", action="store_true", help="do not draw the brand mark")
     ap.add_argument("--no-inpaint", action="store_true",
                     help="skip inpainting (logo/title-only pass on an already-cleaned video)")
@@ -305,6 +415,13 @@ def main():
                     help=f"extend every text window backwards by N s (default {PAD_HEAD})")
     ap.add_argument("--pad-tail", type=float, default=PAD_TAIL,
                     help=f"extend every text window forwards by N s (default {PAD_TAIL})")
+    ap.add_argument("--head-snap", type=float, default=HEAD_SNAP_SEC,
+                    help=f"a persistent title/slogan/watermark starting within N s "
+                         f"of t=0 is snapped to 0.0 so the opening frames get "
+                         f"cleaned (default {HEAD_SNAP_SEC})")
+    ap.add_argument("--persistent-min-sec", type=float, default=PERSISTENT_MIN_SEC,
+                    help=f"minimum duration for the above snap to apply -- keeps "
+                         f"short lower-thirds untouched (default {PERSISTENT_MIN_SEC})")
     ap.add_argument("--print-logo-size", action="store_true",
                     help="print the computed brand mark font size and exit")
     ap.add_argument("--sync-timeline", action="store_true",
@@ -333,14 +450,22 @@ def main():
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
     font_path = pick_bold_font()
+    accent = resolve_accent(args.accent, args.profile)
     ov = build_overlays(plan, frame_w, frame_h, font_path, args.hook_seconds,
                         logo_text=args.logo_text or None,
                         logo_ratio=args.logo_ratio,
                         logo_y=args.logo_y,
                         draw_logo=not args.no_logo,
                         pad_head=args.pad_head,
-                        pad_tail=args.pad_tail)
+                        pad_tail=args.pad_tail,
+                        head_snap=args.head_snap,
+                        persistent_min_sec=args.persistent_min_sec,
+                        accent=accent)
     print(f"font: {font_path}")
+    print(f"accent (title/hook/logo): rgb{tuple(accent)} "
+          f"#{accent[0]:02X}{accent[1]:02X}{accent[2]:02X}"
+          f"{(' from --profile ' + args.profile) if args.profile else ''}"
+          f"{(' from --accent' if args.accent else '')}")
     print(f"overlays: {ov['n_title']} title / {ov['n_hook']} hook / "
           f"{ov['n_sub']} subs / {ov['n_logo']} logo")
     for d in ov["draws"][:3]:

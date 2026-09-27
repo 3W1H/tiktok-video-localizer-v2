@@ -107,8 +107,8 @@ def main():
                          "brand_stroke_width from --profile (fallback 4)")
     ap.add_argument("--logo-style", choices=list(LOGO_STYLES),
                     default="sticker",
-                    help="sticker (default) = SKILL.md 8 Impact lockup in flat "
-                         "#FFDC00 -- what the 2026-09-27 reference cover uses; "
+                    help="sticker (default) = SKILL.md 8 Impact lockup in the flat "
+                         "profile fill_color -- what the 2026-09-27 reference cover uses; "
                          "artistic = same lockup with orange->yellow gradient, "
                          "outer glow and white highlight (keep it for marks "
                          "burned over busy picture, not on a black band); "

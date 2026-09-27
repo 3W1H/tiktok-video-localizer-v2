@@ -1,0 +1,5 @@
+{
+  "_note": "自动入册的新曲目（`bgm_ledger.py add` 写入）。单独放 JSON 而不写进 bgm-library.yaml，是为了不破坏那份人工曲库里的注释。generate_post.py 会把两者合并读取（yaml 优先）。",
+  "tracks": [],
+  "_updated_at": "2026-09-27T17:46:18Z"
+}

@@ -31,8 +31,19 @@ import os
 import re
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from common import (  # noqa: E402
+    normalize_persistent_starts,
+    log_persistent_snaps,
+    load_profile,
+)
+
 CJK = re.compile(r"[\u4e00-\u9fff]")
 CJK_COUNT_MIN = 2  # 少于 2 个汉字的命中视为 OCR 误报
+
+# 品牌黄兜底值。**只是兜底** —— main() 会从 `profile.cover_style.fill_color` 读取真值
+# 并覆盖它（2026-09-27 起品牌色唯一真源在 profile，此前的字面量 0xFFDC00 已作废）。
+DEFAULT_ACCENT_HEX = "0xFFE800"
 
 # 同区域合并阈值（像素）
 MERGE_DIST = 60
@@ -189,7 +200,7 @@ def build_items(regions: list, W: int, H: int) -> list:
             item["replacement"] = {
                 "asset": None,
                 "font_size": _suggest_font_size(h),
-                "font_color": "0xFFDC00" if category == "title" else "white",
+                "font_color": DEFAULT_ACCENT_HEX if category == "title" else "white",
                 "border_color": "black",
                 "border_width": 4 if category == "title" else 3,
                 "x": "(w-text_w)/2",
@@ -262,6 +273,26 @@ def main():
     items = build_items(regions, W, H)
     print(f"[prepare_plan] cjk tracks kept={len(cjk_tracks)} -> merged regions={len(regions)} -> items={len(items)}")
 
+    # (a) 常驻叠字窗口归一化：OCR 会把覆盖片头的 title/slogan/watermark 报晚报，
+    #     start_time 落在 1.0s 这类值上 → 片头几帧永不清理（2026-09-27 事故）。
+    #     在**起草阶段**就归一，plan 文件本身即正确，下游 mask/渲染无需再猜。
+    log_persistent_snaps(normalize_persistent_starts({"items": items}), "prepare_plan")
+
+    # (b) 品牌色只有一个真源 = profile.cover_style.fill_color。
+    #     以前这里硬编码 "0xFFDC00"（老黄），与 §8.2 定的新黄不一致 ——
+    #     与 cover_engine 那次硬编码颜色是同一类 bug。
+    _profile = load_profile(args.profile) or {}
+    _fill = (_profile.get("cover_style") or {}).get("fill_color") or [255, 232, 0]
+    try:
+        accent_hex = "0x%02X%02X%02X" % (int(_fill[0]), int(_fill[1]), int(_fill[2]))
+    except (TypeError, ValueError, IndexError):
+        accent_hex = "0xFFE800"
+    for it in items:
+        rep = it.get("replacement")
+        if rep and rep.get("font_color"):
+            rep["font_color"] = accent_hex if it.get("category") == "title" else "white"
+    print(f"[prepare_plan] brand accent = {accent_hex} (from profile '{args.profile}')")
+
     written = []
 
     def write(name, obj):
@@ -284,8 +315,13 @@ def main():
             "audio_strategy": strategy,
             "audio_strategy_reason": (
                 f"auto-derived: asr.has_chinese_narration={has_zh}. "
-                + ("Chinese narration -> must mute original track (rule 12.3). " if has_zh else "No Chinese narration -> keep original audio. ")
-                + ("User requested NO BGM processing." if args.no_bgm else "TODO(agent): pick BGM from configs/bgm-library.yaml.")
+                + ("Chinese narration -> must mute original track (rule 12.3). " if has_zh else "No Chinese narration -> kept original audio. ")
+                + ("User requested NO BGM processing." if args.no_bgm else
+                   "TODO(agent): pick BGM from configs/bgm-library.yaml, and if the "
+                   "original BGM should not dominate, switch strategy to "
+                   "remove_original_bgm_only (drops ALL original audio) or "
+                   "duck_original_add_bgm (keeps crowd/scene sound at a low level) "
+                   "-- see SKILL.md section 3.")
             ),
             "bgm": {
                 "asset_source": "none" if args.no_bgm else "music-library",
