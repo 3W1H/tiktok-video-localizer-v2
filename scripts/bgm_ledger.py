@@ -86,8 +86,10 @@ ADDED_PATH = os.path.join(CONFIGS_DIR, "bgm-library-added.json")
 MEASURED_PATH = os.path.join(CONFIGS_DIR, "bgm-bpm-measured.json")
 LIBRARY_YAML = os.path.join(CONFIGS_DIR, "bgm-library.yaml")
 
-# 本地库里"没用过"的歌少于这个数，就提示该去网上找新曲了（≈ 一个批次 8 条）
-FRESH_LOW_WATERMARK = 8
+# 本地库里"没用过"的歌少于这个数，就在体检里**报一下余量**（≈ 一个批次 8 条）。
+# ⚠️ 这**不是补货触发线**：曲库按需增长 —— 用的时候现搜现补（`resolve` → 需下载才
+# `add`），**不预先囤**。用户 2026-09-28 明确要求，见 SKILL.md §12.4。
+FRESH_RUNWAY_HINT = 8
 
 # 这些许可不允许用在 TikTok（YouTube Audio Library 标准许可只覆盖 YouTube 站内）
 _UNSAFE_LICENSE_KEYWORDS = ("youtube audio library",)
@@ -276,12 +278,13 @@ def cmd_audit(args):
             print(f"    BPM {bpm:>6s}  {s['representative']}{var}")
 
     warnings = []
-    if len(fresh) < FRESH_LOW_WATERMARK:
+    if len(fresh) < FRESH_RUNWAY_HINT:
         warnings.append(
-            f"没用过的歌只剩 {len(fresh)} 首（低于 {FRESH_LOW_WATERMARK}）—— "
-            f"下一批按 §12.4「两层模型」：**先上网搜**，再用 `resolve` 逐个查本地库；"
-            f"裁决为「需下载」时用 `bgm_ledger.py add` 入册，否则必须复用。")
-        print(f"\n🔴 {' '.join(warnings)}")
+            f"没用过的歌只剩 {len(fresh)} 首（低于 {FRESH_RUNWAY_HINT}）—— "
+            f"**这只是余量提示，不需要预先补货**：下一批按 §12.4「两层模型」"
+            f"**先上网搜**，再用 `resolve` 逐个查本地库；裁决为「需下载」时用 "
+            f"`bgm_ledger.py add` 入册，否则必须复用。")
+        print(f"\nℹ️ {' '.join(warnings)}")
     else:
         print(f"\n✅ 没用过的歌 {len(fresh)} 首，够撑约 {len(fresh)} 条不重复的视频。")
 
@@ -295,7 +298,9 @@ def cmd_audit(args):
     }
     if args.json:
         print("\n" + json.dumps(result, ensure_ascii=False, indent=2))
-    return 1 if warnings else 0, result
+    # 恒返回 0：余量少**不是错误**，只是信息（曲库按需增长，不预先囤）。
+    # 低余量可用 result["warnings"] / --json 读取，别用退出码，否则会误断 `&&` 链。
+    return 0, result
 
 
 # ============================================================
