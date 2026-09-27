@@ -2,12 +2,16 @@
 """
 run_pipeline.py - 全流程编排入口
 
-按顺序执行：
+按顺序执行（封面优先：analyze 之后立即出封面，视频处理后台继续）：
   Job 1: analyze-video（probe → 抽帧 → OCR → tracking → ASR）
+  Job 3: generate-cover（封面优先出图，不再等视频清理/TTS/字幕）
   Job 2: localize-video（清理 → 翻译 → TTS → 时间轴 → 混音 → 字幕）
-  Job 3: generate-cover
   Job 4: generate-post
   QA
+
+`--input` 可以是单个视频文件，也可以是一个目录（批量模式）：目录模式下
+自动扫描目录下的视频文件，逐个查 processed-videos.json，已处理的跳过、
+未处理的才进入处理。
 
 注意：Agent 介入点（视频理解、分类、翻译、tts_adjust、cover 文案、post 文案、QA 裁决）
 由宿主 Agent 完成，本脚本只编排确定性脚本。
@@ -25,6 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (
     save_json, load_json, make_result, log,
     work_path, output_path, ensure_dir, require_tools,
+    EXIT_OK, EXIT_DEGRADED, EXIT_FATAL,
 )
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -238,19 +243,24 @@ def job_localize(video: str, work_dir: str, output_dir: str,
 
 
 def job_cover(work_dir: str, output_dir: str, profile: str = "generic",
-              resume: bool = False) -> Dict:
-    """Job 3: 生成封面"""
+              resume: bool = False, cover_image: Optional[str] = None) -> Dict:
+    """Job 3: 生成封面（封面优先，在 localize 之前执行）"""
     log.info("=" * 60)
-    log.info("Job 3: generate-cover")
+    log.info("Job 3: generate-cover (cover-first)")
     log.info("=" * 60)
 
     if resume and os.path.exists(output_path(output_dir, "cover.jpg")):
         log.info("  ⏭ Skipping cover generation (output exists)")
         return {"generate_cover.py": 0}
 
+    cover_args = ["--work-dir", work_dir, "--output-dir", output_dir,
+                  "--profile", profile]
+    if cover_image:
+        cover_args += ["--cover-image", cover_image]
+
     code = run_script(
         "generate_cover.py",
-        ["--work-dir", work_dir, "--output-dir", output_dir, "--profile", profile],
+        cover_args,
         work_dir, "Generate cover image",
     )
     return {"generate_cover.py": code}
@@ -289,141 +299,206 @@ def job_qa(work_dir: str, output_dir: str) -> Dict:
     return {"qa_video.py": code}
 
 
-def main():
-    ap = argparse.ArgumentParser(description="TikTok Video Localizer - full pipeline")
-    ap.add_argument("--input", required=True, help="Path to input video")
-    ap.add_argument("--work-dir", default=None,
-                    help="Working directory for intermediate files (default: <video_dir>/tiktok/<video_name>/work)")
-    ap.add_argument("--output", default=None,
-                    help="Output directory for final files (default: <video_dir>/tiktok/<video_name>/)")
-    ap.add_argument("--profile", default="generic", choices=["nba", "sports", "generic"], help="Content profile")
-    ap.add_argument("--review", action="store_true", help="Enable review mode for low-confidence items")
-    ap.add_argument("--logo", help="Path to user brand logo (for logo replace)")
-    ap.add_argument("--bgm", help="Path to user BGM asset")
-    ap.add_argument("--resume", action="store_true", help="Resume from existing intermediate files")
-    ap.add_argument("--force", action="store_true",
-                    help="Re-process even if the source video is already recorded as processed")
-    ap.add_argument("--ignore-mtime", action="store_true",
-                    help="Processed-check matches by filename only, ignore file change (size/mtime)")
-    ap.add_argument("--skip", nargs="*", default=[], help="Steps to skip (analyze/localize/cover/post/qa)")
-    args = ap.parse_args()
+VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".mkv", ".avi", ".webm", ".flv", ".ts"}
 
-    require_tools("ffmpeg", "ffprobe")
 
-    # ═══ 处理记录：防重复处理/上传 ═══
-    # 以源视频原始文件名为键。已处理过且文件未变化 → 直接提示输出位置并退出（除非 --force）
+def scan_videos(input_dir: str) -> List[str]:
+    """扫描目录下所有视频文件（顶层，不递归，忽略隐藏文件）"""
+    if not os.path.isdir(input_dir):
+        return []
+    videos = []
+    for name in sorted(os.listdir(input_dir)):
+        if name.startswith("."):
+            continue
+        full = os.path.join(input_dir, name)
+        if os.path.isfile(full) and os.path.splitext(name)[1].lower() in VIDEO_EXTS:
+            videos.append(full)
+    return videos
+
+
+def process_one(video: str, args) -> Dict[str, Any]:
+    """处理单个视频：查重 → analyze → cover(优先) → localize → post → qa → 记录。
+
+    封面优先：封面在 analyze 之后立即生成（不再等视频清理/TTS/字幕），
+    视频处理（localize）随后继续。返回单视频处理结果摘要。
+    """
     from processed_log import check_video, add_video
-    check_result = check_video(args.input, use_mtime=not args.ignore_mtime)
+
+    check_result = check_video(video, use_mtime=not args.ignore_mtime)
     if check_result.get("status") in ("processed", "changed") and not args.force:
-        log.warning("=" * 60)
-        log.warning("VIDEO ALREADY PROCESSED - skipping to avoid duplicate upload")
-        log.warning(f"  Source file : {os.path.basename(args.input)}")
-        log.warning(f"  Output dir  : {check_result.get('output_dir')}")
-        log.warning(f"  Processed at: {check_result.get('processed_at')} (status={check_result.get('status')})")
-        log.warning("  → Re-run with --force to process it again.")
-        log.warning("=" * 60)
-        sys.exit(0)
+        log.info("=" * 60)
+        log.info(f"⏭ SKIP (already processed): {os.path.basename(video)}")
+        log.info(f"  Output dir  : {check_result.get('output_dir')}")
+        log.info(f"  Processed at: {check_result.get('processed_at')} (status={check_result.get('status')})")
+        log.info("  → Re-run with --force to process it again.")
+        log.info("=" * 60)
+        return {"video": video, "status": "skipped",
+                "output_dir": check_result.get("output_dir")}
 
-    # 自动推导输出目录和工作目录（如果未指定）
-    if args.output is None:
-        args.output = derive_output_dir(args.input)
-    if args.work_dir is None:
-        args.work_dir = derive_work_dir(args.input)
+    # 自动推导输出目录和工作目录（单视频可被 --output/--work-dir 覆盖；
+    # 批量模式下这些参数无效，逐个视频独立推导）
+    output_dir = args.output or derive_output_dir(video)
+    work_dir = args.work_dir or derive_work_dir(video)
 
-    # 准备目录
-    ensure_dir(args.work_dir)
-    ensure_dir(args.output)
+    ensure_dir(work_dir)
+    ensure_dir(output_dir)
 
-    # 保存运行配置
-    config = {
-        "input": os.path.abspath(args.input),
-        "work_dir": os.path.abspath(args.work_dir),
-        "output_dir": os.path.abspath(args.output),
+    save_json(work_path(work_dir, "pipeline-config.json"), {
+        "input": os.path.abspath(video),
+        "work_dir": os.path.abspath(work_dir),
+        "output_dir": os.path.abspath(output_dir),
         "profile": args.profile,
         "review_mode": args.review,
         "logo": args.logo,
         "bgm": args.bgm,
-    }
-    save_json(work_path(args.work_dir, "pipeline-config.json"), config)
+    })
 
-    log.info("TikTok Video Localizer - Pipeline Start")
-    log.info(f"  Input: {args.input}")
+    log.info("=" * 60)
+    log.info(f"Pipeline Start: {os.path.basename(video)}")
+    log.info(f"  Input: {video}")
     log.info(f"  Profile: {args.profile}")
-    log.info(f"  Review mode: {args.review}")
-    log.info("")
+    log.info(f"  Output: {output_dir}")
+    log.info("=" * 60)
 
     all_results = {}
 
     # Job 1: Analyze
     if "analyze" not in args.skip:
-        all_results["analyze"] = job_analyze(args.input, args.work_dir, args.resume)
+        all_results["analyze"] = job_analyze(video, work_dir, args.resume)
     else:
         log.info("⏭ Skipping analyze step")
 
-    # Job 2: Localize
+    # Job 3: Cover（封面优先，提前到 localize 之前）
+    if "cover" not in args.skip:
+        all_results["cover"] = job_cover(
+            work_dir, output_dir, args.profile, args.resume,
+            getattr(args, "cover_image", None),
+        )
+    else:
+        log.info("⏭ Skipping cover step")
+
+    # Job 2: Localize（视频处理，封面出图后继续）
     if "localize" not in args.skip:
         all_results["localize"] = job_localize(
-            args.input, args.work_dir, args.output, args.logo, args.bgm, args.resume,
+            video, work_dir, output_dir, args.logo, args.bgm, args.resume,
         )
     else:
         log.info("⏭ Skipping localize step")
 
-    # Job 3: Cover
-    if "cover" not in args.skip:
-        all_results["cover"] = job_cover(args.work_dir, args.output, args.profile, args.resume)
-    else:
-        log.info("⏭ Skipping cover step")
-
     # Job 4: Post
     if "post" not in args.skip:
-        all_results["post"] = job_post(args.work_dir, args.output, args.profile, args.resume)
+        all_results["post"] = job_post(work_dir, output_dir, args.profile, args.resume)
     else:
         log.info("⏭ Skipping post step")
 
     # QA
     if "qa" not in args.skip:
-        all_results["qa"] = job_qa(args.work_dir, args.output)
+        all_results["qa"] = job_qa(work_dir, output_dir)
     else:
         log.info("⏭ Skipping QA step")
 
     # 汇总
     log.info("")
     log.info("=" * 60)
-    log.info("Pipeline Complete")
+    log.info(f"Pipeline Complete: {os.path.basename(video)}")
     log.info("=" * 60)
 
-    # 检查输出文件
     outputs = ["final.mp4", "cover.jpg", "subtitles-en.srt", "tiktok-post.md"]
-    log.info("Output files:")
     for f in outputs:
-        path = os.path.join(args.output, f)
+        path = os.path.join(output_dir, f)
         exists = os.path.exists(path)
         size = os.path.getsize(path) if exists else 0
         log.info(f"  {'✅' if exists else '❌'} {f} ({size/1024:.1f} KB)" if exists else f"  ❌ {f} (missing)")
 
-    # QA 结果
-    qa_path = work_path(args.work_dir, "qa.json")
+    qa_status = "UNKNOWN"
+    qa_path = work_path(work_dir, "qa.json")
     if os.path.exists(qa_path):
         qa = load_json(qa_path, {})
-        log.info(f"\nQA Status: {qa.get('overall', 'UNKNOWN')}")
+        qa_status = qa.get("overall", "UNKNOWN")
+        log.info(f"\nQA Status: {qa_status}")
         if qa.get("degradations"):
             log.warning(f"  Degradations: {len(qa['degradations'])}")
         if qa.get("review_items"):
             log.warning(f"  Review items: {len(qa['review_items'])}")
 
-    log.info(f"\nIntermediate files: {args.work_dir}/")
-    log.info(f"Final output: {args.output}/")
-
-    # ═══ 处理记录：完成后记录（防重复上传）═══
-    qa_status = "UNKNOWN"
-    qa_path = work_path(args.work_dir, "qa.json")
-    if os.path.exists(qa_path):
-        qa_status = load_json(qa_path, {}).get("overall", "UNKNOWN")
-    rec = add_video(args.input, args.output, args.profile, qa_status)
+    rec = add_video(video, output_dir, args.profile, qa_status)
     log.info(f"Processed-log updated: {rec.get('source_file')} -> status={qa_status}")
 
-    # 保存运行结果
-    save_json(work_path(args.work_dir, "pipeline-result.json"), all_results)
+    save_json(work_path(work_dir, "pipeline-result.json"), all_results)
+    return {"video": video, "status": "processed", "output_dir": output_dir,
+            "qa_status": qa_status}
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="TikTok Video Localizer - full pipeline "
+                    "(accepts a single video file or a directory of videos)")
+    ap.add_argument("--input", required=True,
+                    help="Path to input video file, or a directory to batch-process")
+    ap.add_argument("--work-dir", default=None,
+                    help="Working directory for intermediate files "
+                         "(single video only; default: <video_dir>/tiktok/<video_name>/work)")
+    ap.add_argument("--output", default=None,
+                    help="Output directory for final files "
+                         "(single video only; default: <video_dir>/tiktok/<video_name>/)")
+    ap.add_argument("--profile", default="generic", choices=["nba", "sports", "generic"],
+                    help="Content profile")
+    ap.add_argument("--review", action="store_true",
+                    help="Enable review mode for low-confidence items")
+    ap.add_argument("--logo", help="Path to user brand logo (for logo replace)")
+    ap.add_argument("--bgm", help="Path to user BGM asset")
+    ap.add_argument("--cover-image", help="Path to user-provided cover image (skips frame selection)")
+    ap.add_argument("--resume", action="store_true",
+                    help="Resume from existing intermediate files")
+    ap.add_argument("--force", action="store_true",
+                    help="Re-process even if the source video is already recorded as processed")
+    ap.add_argument("--ignore-mtime", action="store_true",
+                    help="Processed-check matches by filename only, ignore file change (size/mtime)")
+    ap.add_argument("--skip", nargs="*", default=[],
+                    help="Steps to skip (analyze/localize/cover/post/qa)")
+    args = ap.parse_args()
+
+    require_tools("ffmpeg", "ffprobe")
+
+    # ═══ 输入判定：单视频文件 vs 目录批量 ═══
+    if os.path.isdir(args.input):
+        if args.output or args.work_dir:
+            log.warning("--output/--work-dir are ignored in directory batch mode; "
+                        "each video derives its own output dir.")
+        videos = scan_videos(args.input)
+        if not videos:
+            log.error(f"No video files found in directory: {args.input}")
+            sys.exit(EXIT_FATAL)
+        log.info("=" * 60)
+        log.info(f"Batch mode: {len(videos)} video(s) found in {args.input}")
+        log.info("=" * 60)
+
+        # 目录批量下 --output/--work-dir 无效，逐个视频独立推导
+        args.output = None
+        args.work_dir = None
+
+        summary = []
+        for v in videos:
+            summary.append(process_one(v, args))
+
+        log.info("")
+        log.info("=" * 60)
+        log.info("Batch Complete")
+        log.info("=" * 60)
+        processed = [s for s in summary if s["status"] == "processed"]
+        skipped = [s for s in summary if s["status"] == "skipped"]
+        log.info(f"  Processed: {len(processed)}")
+        log.info(f"  Skipped  : {len(skipped)} (already in processed-videos.json)")
+        for s in summary:
+            marker = "✅" if s["status"] == "processed" else "⏭"
+            log.info(f"  {marker} {os.path.basename(s['video'])}"
+                     + (f" -> {s.get('output_dir')}" if s.get("output_dir") else ""))
+        log.info("=" * 60)
+    else:
+        if not os.path.exists(args.input):
+            log.error(f"Input not found: {args.input}")
+            sys.exit(EXIT_FATAL)
+        process_one(args.input, args)
 
 
 if __name__ == "__main__":

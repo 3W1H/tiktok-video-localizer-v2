@@ -78,6 +78,11 @@ input/
 
 ## 主流程（详见 `jobs/`）
 
+> ⚠️ **Job 编号是逻辑阶段，不是执行顺序**。`run_pipeline.py` 的实际执行顺序
+> （2026-09-27 起）是 `analyze → cover → localize → post → qa`——封面在视频清理/
+> TTS/字幕之前出图。手工按 job 逐步驱动时也照此顺序：Job 1 之后先做 Job 3 封面，
+> 再做 Job 2 视频处理。
+
 ```
 ■ Job 1: analyze-video
   source.mp4
@@ -279,6 +284,11 @@ python scripts/processed_log.py list
 - **处理前**：自动 `check`。已处理过（或同名文件已变更）→ 打印输出位置并退出，**避免重复上传**；
   确实要重跑加 `--force`；只想按文件名匹配（忽略文件变化）加 `--ignore-mtime`。
 - **完成后**：自动 `add` 记录（status 取 qa.json 的 overall）。
+- **目录批量**（2026-09-27）：`--input <目录>` 时扫描目录下所有视频（顶层、忽略隐藏文件），
+  逐个 `check`，已处理的跳过、未处理的进入。`--output`/`--work-dir` 在批量模式下无效
+  （每个视频独立推导输出目录）。结束时打印 `Processed N / Skipped M` 汇总。
+- **封面优先**（2026-09-27）：Job 顺序改为 `analyze → cover → localize → post → qa`，
+  封面在视频清理/TTS/字幕之前出图；用户自带封面图用 `--cover-image`。
 
 **Agent 手动流程（按 job 逐步驱动脚本时）必须遵守**：
 1. 拿到源视频先 `check`：已处理 → 直接告知用户"该视频已处理过，输出在 <output_dir>"，不重复跑；
@@ -325,7 +335,26 @@ python scripts/run_pipeline.py \
     --output /path/to/custom/output \
     --work-dir /path/to/custom/work \
     --profile nba
+
+# 目录批量（2026-09-27 新增）：给一个目录，扫描里面所有视频，
+# 逐个查 processed-videos.json，已处理的跳过、未处理的才处理
+python scripts/run_pipeline.py \
+    --input /path/to/videos_dir \
+    --profile nba \
+    [--force] [--ignore-mtime]
+# 注意：目录模式下 --output/--work-dir 被忽略（每个视频独立推导输出目录）
+# 结束后打印汇总：Processed N / Skipped M
+
+# 用户自带封面图（跳过选帧，直接适配画幅 + 叠加标题/品牌）
+python scripts/run_pipeline.py \
+    --input /path/to/your/video.mp4 \
+    --cover-image /path/to/cover.png \
+    --profile nba
 ```
+
+**⭐ 编排顺序（2026-09-27 起）**：`analyze → cover（封面优先）→ localize → post → qa`。
+封面在 analyze 之后立即出图（不再等视频清理/TTS/字幕），视频处理随后继续——
+「先出封面早点上传，视频后台跑完」。
 
 **⭐ 第一步永远是接触印样（找中文最高效的方式）：**
 ```bash
