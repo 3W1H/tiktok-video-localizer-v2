@@ -1,0 +1,103 @@
+# NBA Profile - 篮球/NBA 内容风格
+# 新增垂类只需加 YAML，核心 Engine 零改动
+
+name: nba
+display_name: "NBA / Basketball"
+language: en
+region: US
+
+# 语气风格
+tone:
+  primary: "emotional, energetic, nostalgic, dramatic"
+  caption: "high-energy, use emojis sparingly, short punchy sentences"
+  translation: "natural sports commentary style, preserve excitement"
+
+# Caption 风格
+caption_style:
+  max_length: 150
+  emoji_count: 3
+  use_hashtags_in_caption: true
+  cta: "Follow for more iconic moments! 🏀"
+
+# Hashtag 规则
+hashtag_rules:
+  max_count: 5
+  must_include: ["#NBA"]
+  preferred: ["#Basketball", "#Lakers", "#KobeBryant", "#MichaelJordan", "#GameWinner", "#Dunk"]
+  avoid: ["#fyp", "#viral"]  # NBA 内容优先精准标签
+
+# Cover 样式（Profile 驱动，不写死模板）
+cover_style:
+  canvas:
+    width: 1080
+    height: 1920
+  font_chain: ["Anton", "Impact", "Arial Black", "sans-serif"]
+  # 2026-09-27 用户给参考封面截图定稿（截图 912px 宽，按画宽折算到 1080）：
+  # 主标题 Impact 127px —— 截图 "PRIME SHAQ" 字面高 115px / 宽 602px，
+  # 唯有 Impact 127px 能同时对上宽和高（Arial Black 需 86px 才对上宽、字高只有 70px）。
+  # 注意 font_chain 里 Anton 未安装 → 实际落到 Impact（见 make_cover.resolve_font_chain）。
+  font_size: 127
+  # 底部数据行跟随主标题字号（上下两栏同号），由 make_cover.py --stat-size 0 实现
+  stat_size: 0
+  style: "bold_high_contrast"
+  contrast_boost: true
+  headline_max_words: 5
+  headline_min_words: 3
+  # ⚠️ TikTok 经典亮黄色 #FFDC00，禁止改为白色或其他颜色（QA 会校验）
+  fill_color: [255, 220, 0]
+  stroke_color: [0, 0, 0]
+  stroke_width: 6
+  # 品牌署名描边：截图实测约 3px @1080，明显细于主标题（不要套用 8）
+  brand_stroke_width: 3
+  # 2026-09-27 定稿：品牌署名 Impact 64px @1080 宽。截图 "Hoop Dynasty Daily"
+  # 实测宽 496px / 高 57px，逐像素对上 Impact 64px。绝对值，不随主标题缩放。
+  brand_size: 64
+  shadow: true
+  shadow_color: [0, 0, 0, 180]
+  shadow_offset: 3
+  # 封面底部品牌署名（统一替换中文水印/台标为英文品牌）
+  brand_text: "Hoop Dynasty Daily"
+  # 封面帧清理：渲染前按 localization-plan 去除中文/水印（与视频一致）
+  clean_frame_enabled: true
+  # 保护
+  face_protection: true
+  subject_protection: true
+  face_margin_pct: 0.05
+  # 安全区：TikTok 只保证「中间那块」不被裁
+  #   全屏播放 → 底部约 270–480px 被字幕/用户名/按钮盖住
+  #   主页网格 + 搜索结果 → 居中裁切（多数资料为 3:4 = y 240–1680，少数按 1:1
+  #   = y 420–1500），画布上下两端在网格里直接消失
+  # 因此默认取两者的交集：中心 1080×1080（y 422–1498）。标题、数据行、品牌
+  # 署名全部放进这个带内 —— 2026-09-27 用户反馈「封面要能看全标题和 logo」。
+  # 想给画面多留高度可放宽到 0.15/0.15（=3:4 网格窗口），但不要再往外放。
+  safe_zone_top_pct: 0.22
+  safe_zone_bottom_pct: 0.22
+  # 画面与文字的关系（make_cover.py --picture，不传则读这里）
+  #   fill = 画面铺满安全带、文字压在画面上（画面最大，2026-09-27 定稿）
+  #   band = 画面只占文字之间的横条、文字落干净背景（更稳，画面偏小）
+  picture_mode: fill
+  safe_zone_side_pct: 0.07
+
+# BGM 风格偏好（不写死具体歌曲，只写风格方向）
+bgm_style:
+  preferred: ["epic", "cinematic", "high_energy", "dramatic"]
+  bpm_range: [120, 160]
+  mood: "intense, triumphant, nostalgic"
+  example_styles:
+    - "Victory / Angel style - epic cinematic build-up"
+    - "Sports anthem - high energy drum beat"
+    - "Nostalgic piano - for legacy/highlight reels"
+  note: "These are style directions, not specific songs. User must provide actual audio files."
+
+# Post 风格
+post_style:
+  tone: "friendly, passionate, knowledgeable"
+  hashtag_count: 5
+  cta: "Follow for more NBA content! 🏀"
+
+# 分类偏好
+classification_preferences:
+  logo_replace_enabled: true
+  watermark_remove_enabled: true
+  subtitle_translate_enabled: true
+  preserve_scene_text: false  # NBA 内容通常移除场景中文

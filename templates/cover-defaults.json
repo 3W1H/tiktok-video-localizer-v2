@@ -1,0 +1,29 @@
+{
+  "_comment": "Cover engine defaults. Profile cover_style overrides these values.",
+  "canvas": {
+    "width": 1080,
+    "height": 1920
+  },
+  "font_chain": ["Arial Black", "Impact", "Anton", "sans-serif"],
+  "font_size": 100,
+  "style": "clean_bold",
+  "contrast_boost": false,
+  "headline_max_words": 6,
+  "headline_min_words": 2,
+  "fill_color": [255, 255, 255],
+  "stroke_color": [0, 0, 0],
+  "stroke_width": 3,
+  "shadow": true,
+  "shadow_color": [0, 0, 0, 150],
+  "shadow_offset": 2,
+  "face_protection": true,
+  "subject_protection": true,
+  "face_margin_pct": 0.05,
+  "safe_zone_top_pct": 0.10,
+  "safe_zone_bottom_pct": 0.15,
+  "safe_zone_side_pct": 0.07,
+  "candidate_count": 20,
+  "sharpness_threshold": 0.5,
+  "output_format": "JPEG",
+  "output_quality": 95
+}

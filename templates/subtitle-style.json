@@ -1,0 +1,25 @@
+{
+  "_comment": "Subtitle style defaults for render_subtitles.py (FFmpeg subtitles filter force_style)",
+  "font": "Arial",
+  "font_size": 24,
+  "primary_color": "&H00FFFFFF",
+  "outline_color": "&H00000000",
+  "back_color": "&H80000000",
+  "border_style": 3,
+  "outline": 2,
+  "shadow": 1,
+  "alignment": 2,
+  "margin_v": 40,
+  "margin_l": 20,
+  "margin_r": 20,
+  "scale_x": 1,
+  "scale_y": 1,
+  "spacing": 0,
+  "angle": 0,
+  "encoding": 1,
+  "_notes": {
+    "color_format": "ASS color format: &HAABBGGRR (AA=alpha, BB=blue, GG=green, RR=red)",
+    "alignment": "1=bottom-left, 2=bottom-center, 3=bottom-right, 5=top-left, 6=top-center, 7=top-right",
+    "border_style": "1=outline+drop shadow, 3=opaque box"
+  }
+}

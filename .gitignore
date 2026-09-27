@@ -1,0 +1,27 @@
+# ---- 大体积资产 / 派生产物（不进版本库）----
+# workspace/ 是测试残留（552MB，含 source.mp4 与抽帧），随时可重建
+workspace/
+# music/ 是本地 BGM 曲库（186MB），属于资产不是代码
+music/
+
+# ---- 运行时状态 ----
+*.log
+
+# ---- 临时/调试文件 ----
+bbox-test.jpg
+/tmp/
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ---- macOS ----
+.DS_Store
+._*
+
+# ---- 输出产物（产物在用户视频目录，不在 skill 内，这里兜底）----
+**/work/
+**/output/

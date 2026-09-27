@@ -1,0 +1,105 @@
+# TikTok Video Localizer - 全局默认配置
+# 所有脚本启动时加载此配置；命令行参数可覆盖
+
+sampling:
+  # 第一层：低成本粗采样
+  coarse_fps: 1.0                  # 粗扫帧率（FPS）
+  scene_threshold: 0.3              # 场景变化检测阈值（0-1，越大越不敏感）
+  # 第三层：发现疑似文字后局部加密采样
+  dense_fps: 5.0                    # 加密窗口帧率
+  dense_window_pad_sec: 1.5         # 加密窗口前后填充秒数
+  max_dense_window_sec: 30          # 单窗口上限，防长视频爆炸
+  max_total_frames: 2000             # 全局最大抽帧数（保护内存）
+
+confidence:
+  auto_execute: 0.85                # >= 此值自动执行
+  warning_band: 0.60                # >= 此值且 < auto_execute：执行 + QA WARNING
+  # < warning_band：不执行删除，action=review，进入 review 报告
+  review_below: 0.60
+
+timing:
+  # playback_rate 统一定义：1.0=原速，>1.0=加速（1.10=+10%），<1.0=降速
+  playback_rate_min: 0.90           # 允许最低语速
+  playback_rate_max: 1.15           # 允许最高语速
+  max_adjust_rounds: 2               # TTS 超时调整最大迭代轮数
+  window_tolerance_sec: 0.3          # 允许轻微溢出到相邻间隙的容忍度
+  min_segment_gap_sec: 0.2           # 相邻字幕最小间隔
+
+audio:
+  tts_sample_rate: 24000             # TTS 采样率
+  bgm_volume_db: -18                  # BGM 音量（dB）
+  bgm_fade_in_sec: 1.0                # BGM 淡入
+  bgm_fade_out_sec: 2.0               # BGM 淡出
+  loudnorm: true                      # 响度归一化
+  tts_volume_db: 0                    # TTS 音量（dB，相对 BGM）
+  # V1 音频策略（二选一，由 Agent 根据 asr.has_chinese_narration 决定）
+  # mute_original_tts_bgm: 静音原轨 + 英文 TTS + BGM
+  # keep_original: 完整保留原声
+
+cover:
+  canvas_width: 1080
+  canvas_height: 1920
+  # 候选帧筛选
+  candidate_count: 20                 # 初始候选帧数
+  sharpness_threshold: 0.5            # 清晰度阈值
+  # 安全区（相对画布百分比）
+  safe_zone_top_pct: 0.10
+  safe_zone_bottom_pct: 0.15
+  safe_zone_side_pct: 0.07
+  # 人脸/主体保护
+  face_protection: true
+  subject_protection: true
+  face_margin_pct: 0.05               # 人脸周围额外留白
+
+qa:
+  residual_ocr_sample_frames: 5       # 残留中文抽检帧数
+  duration_tolerance_sec: 0.5          # 时长偏差容忍
+  residual_chinese_conf_threshold: 0.6 # 残留中文置信度阈值
+  subtitle_timing_tolerance_sec: 0.3   # 字幕时间轴偏差容忍
+  audio_loudness_target: -16           # 目标响度（LUFS）
+  audio_loudness_tolerance: 2.0        # 响度偏差容忍（LUFS）
+  cover_min_sharpness: 0.4             # 封面最低清晰度
+
+cleaning:
+  # 清理方法优先级（从高到低）
+  method_priority:
+    - crop                             # 裁剪（仅边缘区域）
+    - clone_patch                      # 克隆修补（从相似区域复制）
+    - opencv_inpaint                   # OpenCV inpaint（Telea/NS）
+    - ai_inpaint                       # AI inpaint（可选 Provider，默认不用）
+  inpaint_radius: 3                    # OpenCV inpaint 半径
+  # 人脸/主体保护
+  protect_faces: true
+  protect_subjects: true
+  protection_margin_px: 20             # 保护区域额外边距
+
+ocr:
+  # 引擎策略：只保留 RapidOCR 一个默认引擎，且**不做静默降级**。
+  #   rapidocr    = RapidOCR / onnxruntime，唯一默认（初始化约 2.6s），中文美术字召回高
+  #   paddleocr   = 与 rapidocr 同源 PP-OCRv4（仅运行时不同），准确率差异属噪声，
+  #                 交叉验证无收益；沙箱内可运行但初始化慢约 5 倍，仅显式排障用
+  #   tesseract   = 中文描边/彩色美术字召回率≈0，仅显式排障用，禁止用于交付
+  # 引擎不可用时**不得**判定「画面无中文」——那会把「能力缺失」伪装成「没发现问题」。
+  default_engine: rapidocr             # rapidocr（唯一默认）/ paddleocr / tesseract / auto
+  lang: ch_sim+en                      # 识别语言
+  min_confidence: 0.5                  # OCR 最低置信度（低于此值的结果丢弃）
+  min_text_height_px: 8                # 最小文字高度（像素）
+  merge_overlap_threshold: 0.3         # 区域合并重叠阈值
+
+tracking:
+  iou_threshold: 0.3                   # 跨帧关联 IoU 阈值
+  text_similarity_threshold: 0.6       # 文本相似度阈值
+  max_gap_sec: 2.0                     # 最大断帧间隔（超过则视为新 track）
+  min_duration_sec: 0.3                # 最短持续时间（低于此值的 track 标记为 flash）
+  persistence_thresholds:
+    flash: 1.0                          # < 1秒：flash
+    short: 5.0                          # 1-5秒：short
+    long: 30.0                          # 5-30秒：long
+    # > 30秒：full_video
+
+asr:
+  default_engine: whisper               # whisper / cloud / agent_native
+  whisper_model: base                   # tiny / base / small（笔记本推荐 base）
+  language: zh                          # 源语言
+  min_segment_duration: 0.5             # 最短分段时长
+  chinese_narration_threshold: 0.5     # 中文旁白判定阈值（中文占比）

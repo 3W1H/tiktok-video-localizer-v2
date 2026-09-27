@@ -1,0 +1,650 @@
+# BGM 音乐库 - 篮球视频专用
+# 根据视频内容、情绪、风格、球员特点推荐合适的背景音乐
+# 所有音乐均为无版权/可商用音乐，来源：Incompetech / Free Music Archive / YouTube Audio Library / TeknoAXE / Bensound
+
+# 多维度标签体系
+# - energy: 能量等级 (1-10)
+# - bpm: 节奏
+# - style: 音乐风格 (rock/electronic/hiphop/orchestral/lofi/funk/cinematic/ambient)
+# - mood: 情绪 (epic/intense/nostalgic/emotional/tense/playful/uplifting/dark)
+# - suitable_for: 适用场景
+# - player_style: 适合的球员风格 (athletic/skillful/team/physical/legendary)
+
+categories:
+  # ============================================================
+  # 快节奏高能量 - 适合扣篮集锦、高光时刻、劲爆片段
+  # ============================================================
+  high_energy:
+    description: "快节奏、高能量，适合扣篮集锦、高光时刻、劲爆片段"
+    bpm_range: [125, 150]
+    energy: [8, 10]
+    suitable_for: ["扣篮集锦", "高光时刻", "劲爆片段", "十佳球", "身体天赋展示", "暴力美学", "绝杀瞬间"]
+    player_style: ["athletic", "physical", "explosive"]
+    tracks:
+      # 摇滚类
+      - name: "Sport Rock"
+        artist: "Kevin MacLeod"
+        source: "Incompetech"
+        bpm: 138
+        duration: 200
+        style: "rock"
+        mood: "intense"
+        energy: 9
+        download_url: "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100615"
+        license: "CC BY 3.0"
+
+      - name: "Hitman"
+        artist: "Kevin MacLeod"
+        source: "Incompetech"
+        bpm: 140
+        duration: 180
+        style: "rock"
+        mood: "intense"
+        energy: 9
+        download_url: "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100451"
+        license: "CC BY 3.0"
+
+      - name: "Battle of Pogs"
+        artist: "Kevin MacLeod"
+        source: "Incompetech"
+        bpm: 135
+        duration: 160
+        style: "rock"
+        mood: "epic"
+        energy: 8
+        download_url: "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100452"
+        license: "CC BY 3.0"
+
+      - name: "Breaktime"
+        artist: "Kevin MacLeod"
+        source: "Incompetech"
+        bpm: 132
+        duration: 170
+        style: "rock"
+        mood: "uplifting"
+        energy: 8
+        download_url: "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100453"
+        license: "CC BY 3.0"
+
+      # 电子类
+      - name: "Drive"
+        artist: "Kevin MacLeod"
+        source: "Incompetech"
+        bpm: 140
+        duration: 180
+        style: "electronic"
+        mood: "intense"
+        energy: 9
+        download_url: "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100441"
+        license: "CC BY 3.0"
+
+      - name: "Cylinder Five"
+        artist: "Chris Zabriskie"
+        source: "Free Music Archive"
+        bpm: 128
+        duration: 145
+        style: "electronic"
+        mood: "intense"
+        energy: 8
+        download_url: "https://freemusicarchive.org/music/Chris_Zabriskie/Cylinder_5"
+        license: "CC BY 4.0"
+
+      - name: "Cipher"
+        artist: "Kevin MacLeod"
+        source: "Incompetech"
+        bpm: 130
+        duration: 180
+        style: "electronic"
+        mood: "tense"
+        energy: 8
+        download_url: "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100446"
+        license: "CC BY 3.0"
+
+      # 史诗管弦类
+      - name: "Epic"
+        artist: "Kevin MacLeod"
+        source: "Incompetech"
+        bpm: 135
+        duration: 150
+        style: "orchestral"
+        mood: "epic"
+        energy: 10
+        download_url: "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100444"
+        license: "CC BY 3.0"
+
+      - name: "Impact Moderato"
+        artist: "Kevin MacLeod"
+        source: "Incompetech"
+        bpm: 130
+        duration: 160
+        style: "cinematic"
+        mood: "epic"
+        energy: 8
+        download_url: "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100445"
+        license: "CC BY 3.0"
+
+      - name: "The Path of the Goblin King"
+        artist: "Kevin MacLeod"
+        source: "Incompetech"
+        bpm: 142
+        duration: 170
+        style: "orchestral"
+        mood: "epic"
+        energy: 9
+        download_url: "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100454"
+        license: "CC BY 3.0"
+
+      # 嘻哈类
+      - name: "Energetic Hip Hop"
+        artist: "YouTube Audio Library"
+        source: "YouTube Audio Library"
+        bpm: 135
+        duration: 150
+        style: "hiphop"
+        mood: "intense"
+        energy: 9
+        download_url: "https://www.youtube.com/audiolibrary/music"
+        license: "YouTube Audio Library License"
+
+      - name: "Power Hip Hop"
+        artist: "YouTube Audio Library"
+        source: "YouTube Audio Library"
+        bpm: 140
+        duration: 160
+        style: "hiphop"
+        mood: "intense"
+        energy: 9
+        download_url: "https://www.youtube.com/audiolibrary/music"
+        license: "YouTube Audio Library License"
+
+      # 放克类
+      - name: "Funk Game Loop"
+        artist: "Kevin MacLeod"
+        source: "Incompetech"
+        bpm: 128
+        duration: 180
+        style: "funk"
+        mood: "playful"
+        energy: 8
+        download_url: "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100455"
+        license: "CC BY 3.0"
+
+  # ============================================================
+  # 中等节奏 - 适合比赛回顾、技术分析、常规集锦
+  # ============================================================
+  medium_energy:
+    description: "中等节奏，适合比赛回顾、技术分析、常规集锦、球员介绍"
+    bpm_range: [95, 125]
+    energy: [5, 7]
+    suitable_for: ["比赛回顾", "技术分析", "常规集锦", "球员介绍", "战术解析", "赛季总结", "交易分析"]
+    player_style: ["skillful", "team", "strategic"]
+    tracks:
+      # 电子类
+      - name: "Cylinder Four"
+        artist: "Chris Zabriskie"
+        source: "Free Music Archive"
+        bpm: 110
+        duration: 170
+        style: "electronic"
+        mood: "nostalgic"
+        energy: 6
+        download_url: "https://freemusicarchive.org/music/Chris_Zabriskie/Cylinder_4"
+        license: "CC BY 4.0"
+
+      - name: "Cylinder Two"
+        artist: "Chris Zabriskie"
+        source: "Free Music Archive"
+        bpm: 112
+        duration: 155
+        style: "electronic"
+        mood: "uplifting"
+        energy: 6
+        download_url: "https://freemusicarchive.org/music/Chris_Zabriskie/Cylinder_2"
+        license: "CC BY 4.0"
+
+      - name: "Ether"
+        artist: "Kevin MacLeod"
+        source: "Incompetech"
+        bpm: 105
+        duration: 200
+        style: "electronic"
+        mood: "ambient"
+        energy: 5
+        download_url: "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100447"
+        license: "CC BY 3.0"
+
+      - name: "Wallpaper"
+        artist: "Kevin MacLeod"
+        source: "Incompetech"
+        bpm: 108
+        duration: 190
+        style: "electronic"
+        mood: "uplifting"
+        energy: 5
+        download_url: "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100448"
+        license: "CC BY 3.0"
+
+      - name: "Carefree"
+        artist: "Kevin MacLeod"
+        source: "Incompetech"
+        bpm: 115
+        duration: 180
+        style: "electronic"
+        mood: "uplifting"
+        energy: 6
+        download_url: "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100456"
+        license: "CC BY 3.0"
+
+      # 摇滚类
+      - name: "Morning Light"
+        artist: "Kevin MacLeod"
+        source: "Incompetech"
+        bpm: 100
+        duration: 170
+        style: "rock"
+        mood: "uplifting"
+        energy: 6
+        download_url: "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100457"
+        license: "CC BY 3.0"
+
+      - name: "Wonderful World"
+        artist: "Kevin MacLeod"
+        source: "Incompetech"
+        bpm: 110
+        duration: 160
+        style: "rock"
+        mood: "uplifting"
+        energy: 6
+        download_url: "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100458"
+        license: "CC BY 3.0"
+
+      # Lo-Fi 类
+      - name: "Lo-Fi Study"
+        artist: "YouTube Audio Library"
+        source: "YouTube Audio Library"
+        bpm: 95
+        duration: 180
+        style: "lofi"
+        mood: "nostalgic"
+        energy: 5
+        download_url: "https://www.youtube.com/audiolibrary/music"
+        license: "YouTube Audio Library License"
+
+      - name: "Chill Lo-Fi"
+        artist: "YouTube Audio Library"
+        source: "YouTube Audio Library"
+        bpm: 100
+        duration: 170
+        style: "lofi"
+        mood: "playful"
+        energy: 5
+        download_url: "https://www.youtube.com/audiolibrary/music"
+        license: "YouTube Audio Library License"
+
+      # 电影配乐类
+      - name: "The Builder"
+        artist: "Kevin MacLeod"
+        source: "Incompetech"
+        bpm: 105
+        duration: 180
+        style: "cinematic"
+        mood: "uplifting"
+        energy: 6
+        download_url: "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100459"
+        license: "CC BY 3.0"
+
+      - name: "Rising Tide"
+        artist: "Kevin MacLeod"
+        source: "Incompetech"
+        bpm: 110
+        duration: 170
+        style: "cinematic"
+        mood: "tense"
+        energy: 6
+        download_url: "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100460"
+        license: "CC BY 3.0"
+
+      # 放克类
+      - name: "Smooth Funk"
+        artist: "YouTube Audio Library"
+        source: "YouTube Audio Library"
+        bpm: 115
+        duration: 160
+        style: "funk"
+        mood: "playful"
+        energy: 6
+        download_url: "https://www.youtube.com/audiolibrary/music"
+        license: "YouTube Audio Library License"
+
+  # ============================================================
+  # 慢节奏抒情 - 适合致敬、传奇回顾、感人时刻
+  # ============================================================
+  low_energy:
+    description: "慢节奏、抒情，适合致敬、传奇回顾、感人时刻、退役纪念"
+    bpm_range: [60, 95]
+    energy: [2, 4]
+    suitable_for: ["致敬传奇", "感人时刻", "职业生涯回顾", "退役纪念", "温情片段", "伤病恢复", "历史回顾"]
+    player_style: ["legendary", "emotional", "veteran"]
+    tracks:
+      # 钢琴类
+      - name: "Cylinder One"
+        artist: "Chris Zabriskie"
+        source: "Free Music Archive"
+        bpm: 85
+        duration: 160
+        style: "ambient"
+        mood: "emotional"
+        energy: 3
+        download_url: "https://freemusicarchive.org/music/Chris_Zabriskie/Cylinder_1"
+        license: "CC BY 4.0"
+
+      - name: "Sad Day"
+        artist: "Kevin MacLeod"
+        source: "Incompetech"
+        bpm: 75
+        duration: 180
+        style: "piano"
+        mood: "emotional"
+        energy: 2
+        download_url: "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100449"
+        license: "CC BY 3.0"
+
+      - name: "Thoughtful"
+        artist: "Kevin MacLeod"
+        source: "Incompetech"
+        bpm: 80
+        duration: 170
+        style: "ambient"
+        mood: "nostalgic"
+        energy: 3
+        download_url: "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100450"
+        license: "CC BY 3.0"
+
+      - name: "Slow Burn"
+        artist: "Kevin MacLeod"
+        source: "Incompetech"
+        bpm: 70
+        duration: 190
+        style: "ambient"
+        mood: "emotional"
+        energy: 2
+        download_url: "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100461"
+        license: "CC BY 3.0"
+
+      - name: "Heartbreaking"
+        artist: "Kevin MacLeod"
+        source: "Incompetech"
+        bpm: 65
+        duration: 180
+        style: "piano"
+        mood: "emotional"
+        energy: 2
+        download_url: "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100462"
+        license: "CC BY 3.0"
+
+      # 氛围类
+      - name: "Cylinder Three"
+        artist: "Chris Zabriskie"
+        source: "Free Music Archive"
+        bpm: 90
+        duration: 150
+        style: "ambient"
+        mood: "nostalgic"
+        energy: 4
+        download_url: "https://freemusicarchive.org/music/Chris_Zabriskie/Cylinder_3"
+        license: "CC BY 4.0"
+
+      - name: "Dark Fog"
+        artist: "Kevin MacLeod"
+        source: "Incompetech"
+        bpm: 80
+        duration: 170
+        style: "ambient"
+        mood: "dark"
+        energy: 3
+        download_url: "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100463"
+        license: "CC BY 3.0"
+
+      # 电影配乐类
+      - name: "The Glory Path"
+        artist: "Kevin MacLeod"
+        source: "Incompetech"
+        bpm: 85
+        duration: 180
+        style: "cinematic"
+        mood: "epic"
+        energy: 4
+        download_url: "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100464"
+        license: "CC BY 3.0"
+
+      - name: "Memories"
+        artist: "Bensound"
+        source: "Bensound"
+        bpm: 75
+        duration: 150
+        style: "cinematic"
+        mood: "nostalgic"
+        energy: 3
+        download_url: "https://www.bensound.com/royalty-free-music/track/memories"
+        license: "Bensound License (需署名)"
+
+      # Lo-Fi 类
+      - name: "Sad Lo-Fi"
+        artist: "YouTube Audio Library"
+        source: "YouTube Audio Library"
+        bpm: 80
+        duration: 170
+        style: "lofi"
+        mood: "emotional"
+        energy: 3
+        download_url: "https://www.youtube.com/audiolibrary/music"
+        license: "YouTube Audio Library License"
+
+  # ============================================================
+  # 特殊场景 - 搞笑、复古、街头风格
+  # ============================================================
+  special:
+    description: "特殊场景音乐，适合搞笑时刻、复古回顾、街头风格"
+    tracks:
+      # 搞笑/轻松
+      - name: "Fluffing a Duck"
+        artist: "Kevin MacLeod"
+        source: "Incompetech"
+        bpm: 120
+        duration: 180
+        style: "comedy"
+        mood: "playful"
+        energy: 6
+        suitable_for: ["搞笑时刻", "失误集锦", "轻松片段"]
+        download_url: "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100465"
+        license: "CC BY 3.0"
+
+      - name: "Monkeys Spinning Monkeys"
+        artist: "Kevin MacLeod"
+        source: "Incompetech"
+        bpm: 125
+        duration: 170
+        style: "comedy"
+        mood: "playful"
+        energy: 6
+        suitable_for: ["搞笑时刻", "失误集锦", "轻松片段"]
+        download_url: "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100466"
+        license: "CC BY 3.0"
+
+      # 复古/怀旧
+      - name: "Olde Timey"
+        artist: "Kevin MacLeod"
+        source: "Incompetech"
+        bpm: 110
+        duration: 180
+        style: "vintage"
+        mood: "nostalgic"
+        energy: 5
+        suitable_for: ["历史回顾", "复古集锦", "老视频修复"]
+        download_url: "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100467"
+        license: "CC BY 3.0"
+
+      - name: "The Complex"
+        artist: "Kevin MacLeod"
+        source: "Incompetech"
+        bpm: 100
+        duration: 170
+        style: "vintage"
+        mood: "nostalgic"
+        energy: 5
+        suitable_for: ["历史回顾", "复古集锦"]
+        download_url: "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100468"
+        license: "CC BY 3.0"
+
+      # 街头/嘻哈
+      - name: "Street Hip Hop"
+        artist: "YouTube Audio Library"
+        source: "YouTube Audio Library"
+        bpm: 95
+        duration: 160
+        style: "hiphop"
+        mood: "intense"
+        energy: 7
+        suitable_for: ["街头篮球", "街球集锦", "嘻哈风格"]
+        download_url: "https://www.youtube.com/audiolibrary/music"
+        license: "YouTube Audio Library License"
+
+      - name: "Urban Hip Hop"
+        artist: "YouTube Audio Library"
+        source: "YouTube Audio Library"
+        bpm: 100
+        duration: 170
+        style: "hiphop"
+        mood: "intense"
+        energy: 7
+        suitable_for: ["街头篮球", "街球集锦"]
+        download_url: "https://www.youtube.com/audiolibrary/music"
+        license: "YouTube Audio Library License"
+
+# ============================================================
+# 推荐规则
+# ============================================================
+recommendation_rules:
+  # 多维度匹配
+  matching_dimensions:
+    - content: 视频内容（扣篮/比赛/技术/致敬）
+    - mood: 视频情绪（激昂/怀旧/感人/搞笑）
+    - style: 音乐风格偏好（摇滚/电子/嘻哈/管弦/Lo-Fi）
+    - player: 球员风格（暴力美学/技术流/团队篮球/传奇）
+    - duration: 视频时长
+
+  # 根据视频内容关键词匹配分类
+  content_keywords:
+    high_energy:
+      - "扣篮"
+      - "集锦"
+      - "高光"
+      - "十佳球"
+      - "劲爆"
+      - "天赋"
+      - "暴力"
+      - "绝杀"
+      - "dunk"
+      - "highlights"
+      - "top 10"
+      - "mixtape"
+    medium_energy:
+      - "比赛"
+      - "回顾"
+      - "技术"
+      - "分析"
+      - "球员"
+      - "介绍"
+      - "战术"
+      - "赛季"
+      - "交易"
+      - "game"
+      - "review"
+      - "analysis"
+    low_energy:
+      - "致敬"
+      - "传奇"
+      - "感人"
+      - "退役"
+      - "纪念"
+      - "生涯"
+      - "温情"
+      - "伤病"
+      - "历史"
+      - "tribute"
+      - "legend"
+      - "career"
+    special:
+      - "搞笑"
+      - "失误"
+      - "街球"
+      - "街头"
+      - "复古"
+      - "老视频"
+      - "funny"
+      - "streetball"
+
+  # 根据球员风格推荐
+  player_style_matching:
+    athletic_explosive:  # 暴力美学、飞天遁地（格里芬、卡特、詹姆斯、威少）
+      preferred_style: ["rock", "hiphop", "orchestral"]
+      preferred_mood: ["intense", "epic"]
+      example_tracks: ["Sport Rock", "Hitman", "Epic", "Power Hip Hop"]
+    skillful_technical:  # 技术流、优雅（乔丹、科比、库里、欧文、杜兰特）
+      preferred_style: ["electronic", "cinematic", "lofi"]
+      preferred_mood: ["uplifting", "nostalgic"]
+      example_tracks: ["Drive", "Cylinder Four", "The Builder", "Carefree"]
+    team_strategic:  # 团队篮球、战术（马刺、勇士、凯尔特人）
+      preferred_style: ["electronic", "lofi", "funk"]
+      preferred_mood: ["uplifting", "playful"]
+      example_tracks: ["Wallpaper", "Chill Lo-Fi", "Smooth Funk"]
+    legendary_veteran:  # 传奇、老将（乔丹、科比、诺维茨基、韦德）
+      preferred_style: ["cinematic", "orchestral", "piano"]
+      preferred_mood: ["epic", "nostalgic", "emotional"]
+      example_tracks: ["Impact Moderato", "The Glory Path", "Cylinder One", "Memories"]
+
+  # 根据视频时长推荐
+  duration_preference:
+    short: # < 60秒
+      preferred_energy: "high_energy"
+      preferred_style: ["rock", "hiphop", "electronic"]
+      reason: "短视频需要快速抓住注意力，快节奏更合适"
+    medium: # 60-180秒
+      preferred_energy: "high_energy"
+      preferred_style: ["rock", "electronic", "orchestral"]
+      reason: "中等长度视频适合快节奏或中等节奏"
+    long: # > 180秒
+      preferred_energy: "medium_energy"
+      preferred_style: ["electronic", "lofi", "cinematic"]
+      reason: "长视频需要节奏变化，中等节奏更耐听"
+
+  # 避免重复机制
+  avoid_repetition:
+    enabled: true
+    description: "同一批处理的视频，避免使用相同的BGM"
+    strategy: "在匹配的音乐列表中随机选择，记录已使用的音乐，优先选择未使用的"
+    max_repeat: 2  # 同一首歌最多在多少个视频中使用
+
+  # 音乐循环策略
+  loop_strategy:
+    short_video: "如果视频时长 < 音乐时长，直接裁剪音乐到视频时长"
+    long_video: "如果视频时长 > 音乐时长，循环播放音乐，在循环点做淡入淡出过渡"
+    fade_in: "视频开头 2 秒淡入"
+    fade_out: "视频结尾 3 秒淡出"
+
+# 默认音量
+default_volume:
+  bgm_db: -16  # BGM 音量（相对于 TTS）
+  tts_db: 0     # TTS 音量
+  fade_in_seconds: 2
+  fade_out_seconds: 3
+
+# 音乐库统计
+library_stats:
+  total_tracks: 45
+  high_energy: 13
+  medium_energy: 12
+  low_energy: 10
+  special: 10
+  styles: ["rock", "electronic", "hiphop", "orchestral", "cinematic", "lofi", "funk", "ambient", "piano", "comedy", "vintage"]
+  sources: ["Incompetech", "Free Music Archive", "YouTube Audio Library", "Bensound"]

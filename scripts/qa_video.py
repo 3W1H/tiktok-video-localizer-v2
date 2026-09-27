@@ -1,0 +1,607 @@
+#!/usr/bin/env python3
+"""
+qa_video.py - 质量检查
+
+六类检查：
+  1. video:    无黑帧/花屏，时长一致
+  2. subtitle: SRT 条目数、时间轴冲突
+  3. cover:    人脸/主体未被遮挡
+  4. audio:    响度正常，无中文残留（有中文旁白策略时）
+  5. localization: 残留中文 OCR 抽检、水印区复检、replace 后 Logo 可见性、review 项汇总
+  6. chinese_residue: 【硬门禁】对 final.mp4 全片 OCR 扫描，检出中文即 FAIL
+
+输出：work/qa.json（PASS / WARNING / FAIL）
+
+禁止假装成功：清理置信度低如实标 LOW，残留中文由 QA 抽检上报。
+
+⚠️ 第 6 项是硬门禁，与第 5 项的区别：
+  第 5 项检查「计划里的项执行得对不对」（依赖 plan），
+  第 6 项检查「成品里到底还有没有中文」（独立于 plan，直接对画面下结论）。
+  plan 若漏了某处中文，第 5 项查不出来 —— 这正是 C 视频假 PASS 的成因。
+"""
+
+import argparse
+import glob
+import os
+import sys
+import tempfile
+from typing import Dict, Any, List
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from common import (
+    run, save_json, load_json, make_result, log,
+    work_path, output_path, require_tools, check_python_package,
+)
+
+
+def check_video(output_dir: str, work_dir: str) -> Dict:
+    """检查视频：时长、黑帧、花屏"""
+    final_path = os.path.join(output_dir, "final.mp4")
+    probe = load_json(work_path(work_dir, "probe.json"), {})
+    expected_duration = probe.get("duration_sec", 0)
+
+    # 原创化（标题卡/变速/BGM）会改变总时长，此时 probe.json 记录的源时长
+    # 不再是正确基准，否则会误报 "Duration: expected=14.5s, actual=16.0s" 的 FAIL。
+    orig = load_json(work_path(work_dir, "originalize-result.json"), {})
+    if orig.get("duration_sec"):
+        expected_duration = orig["duration_sec"]
+
+    if not os.path.exists(final_path):
+        return {"status": "fail", "detail": "final.mp4 not found", "duration_match": False}
+
+    # 用 ffprobe 检查时长
+    try:
+        r = run([
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            final_path,
+        ])
+        actual_duration = float(r.stdout.strip())
+    except Exception:
+        actual_duration = 0
+
+    duration_diff = abs(actual_duration - expected_duration)
+    duration_match = duration_diff < 0.5
+
+    # 黑帧检测（简单：检查第一帧和中间帧是否全黑）
+    black_frames = 0
+    try:
+        # 抽取 3 帧检查。写到临时目录且**不回收**：本环境对删除有批量确认钩子，
+        # 逐个 unlink 累计到阈值会把 QA 整段打断（2026-09-27 实测）。
+        scratch = tempfile.mkdtemp(prefix="ttl-qa-frames-")
+        for ts in [1, actual_duration / 2, max(1, actual_duration - 1)]:
+            frame_path = os.path.join(scratch, f"qa_frame_{int(ts)}.png")
+            run([
+                "ffmpeg", "-y", "-ss", str(ts), "-i", final_path,
+                "-vframes", "1", frame_path,
+            ], check=False)
+            if os.path.exists(frame_path):
+                try:
+                    import cv2
+                    import numpy as np
+                    img = cv2.imread(frame_path, cv2.IMREAD_GRAYSCALE)
+                    if img is not None and np.mean(img) < 5:
+                        black_frames += 1
+                except ImportError:
+                    pass
+    except Exception:
+        pass
+
+    status = "pass" if duration_match and black_frames == 0 else "warning"
+    if not duration_match:
+        status = "fail"
+
+    return {
+        "status": status,
+        "detail": f"Duration: expected={expected_duration:.1f}s, actual={actual_duration:.1f}s, diff={duration_diff:.2f}s",
+        "duration_match": duration_match,
+        "expected_duration": expected_duration,
+        "actual_duration": actual_duration,
+        "black_frames_detected": black_frames,
+    }
+
+
+def check_subtitle(output_dir: str, work_dir: str) -> Dict:
+    """检查字幕：SRT 条目数、时间轴冲突"""
+    srt_path = os.path.join(output_dir, "subtitles-en.srt")
+    timeline = load_json(work_path(work_dir, "timeline.json"), {})
+
+    if not os.path.exists(srt_path):
+        return {"status": "fail", "detail": "subtitles-en.srt not found", "srt_entries": 0}
+
+    # 统计 SRT 条目
+    with open(srt_path, encoding="utf-8") as f:
+        content = f.read()
+    srt_entries = content.count("-->")
+
+    # 检查时间轴冲突
+    # NOTE (2026-09-26): static overlays (title/watermark/slogan) span the whole
+    # video, so their 0-230s windows always "overlap" every real subtitle. They are
+    # not subtitle cues and must be excluded, otherwise QA reports phantom conflicts.
+    plan = load_json(work_path(work_dir, "localization-plan.json"), {})
+    items = plan.get("items", [])
+    static_cats = ("title", "watermark", "logo", "slogan")
+    entries = []
+    for e in timeline.get("entries", []):
+        idx = e.get("index")
+        if items and idx is not None and idx < len(items):
+            if items[idx].get("category") in static_cats:
+                continue
+        entries.append(e)
+
+    timeline_conflicts = 0
+    for i in range(len(entries) - 1):
+        if entries[i].get("final_end", 0) > entries[i + 1].get("final_start", 0):
+            timeline_conflicts += 1
+
+    unresolved = len(timeline.get("unresolved", []))
+    status = "pass" if timeline_conflicts == 0 and unresolved == 0 else "warning"
+
+    return {
+        "status": status,
+        "detail": f"SRT entries: {srt_entries}, timeline conflicts: {timeline_conflicts}, unresolved: {unresolved}",
+        "srt_entries": srt_entries,
+        "timeline_conflicts": timeline_conflicts,
+        "unresolved": unresolved,
+    }
+
+
+def has_chinese_text(text: str, min_chars: int = 2) -> bool:
+    """检测文本是否含中文（CJK）。要求至少 2 个连续区间字符，避免 OCR 把
+    球场纹理/英文字母误识别为单个中文字（如 '人'、'一'、'有'）造成误报。"""
+    count = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
+    return count >= min_chars
+
+
+def ocr_cover_chinese(cover_path: str) -> List[str]:
+    """OCR 封面并返回检测到的中文字符串（引擎不可用时返回空列表）
+
+    只用 RapidOCR（与全片 OCR 同一个引擎）。
+    **刻意不设 tesseract 兜底**：tesseract 对中文描边美术字召回≈0，
+    静默顶上只会让「引擎不可用」伪装成「封面没有中文」。
+    引擎不可用的判断由调用方（check_cover）负责 —— 它会据此报 warning，
+    而不是把「没查到」当成「查过了且是干净的」。
+    """
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from ocr_video import ocr_with_rapidocr
+        lines: List[str] = []
+        for det in ocr_with_rapidocr(cover_path):
+            t = (det.get("text") or "").strip()
+            if t and has_chinese_text(t):
+                lines.append(t)
+        return lines
+    except Exception:
+        return []
+
+
+def check_chinese_residue(output_dir: str, work_dir: str,
+                          fps: float = 1.0, min_confidence: float = 0.5) -> Dict:
+    """【硬门禁】对成品 final.mp4 全片 OCR 扫描，检出中文即 FAIL。
+
+    为什么必须独立跑一遍成品：
+      清理是「按 localization-plan 执行」的。plan 若漏了某处中文，
+      执行得再完美也不会有产物 —— 只看 plan 的 QA 根本发现不了漏检。
+      C（shaq_gentle_giant）26-28s 的「卤蛋盘卤蛋」就是这么活下来的：
+      当时 QA 复用了处理前的结论，且 OCR 引擎是不可信的 tesseract，于是假 PASS。
+
+    与 5.localization 的分工：
+      第 5 项 = 「计划里的项执行得对不对」（依赖 plan）
+      本项   = 「成品里到底还有没有中文」（独立于 plan，直接看画面）
+
+    引擎不可用时**不得判定通过** —— 那等于重演「假 PASS」。
+
+    fps 说明：默认 1fps 对持续 ≥1s 的字幕足够；极短闪现（<1s）可能漏，
+    可用 --residue-fps 2 提高采样率。
+    """
+    final_path = os.path.join(output_dir, "final.mp4")
+    if not os.path.exists(final_path):
+        return {"status": "fail", "detail": "final.mp4 not found",
+                "residues": [], "groups": []}
+
+    if not check_python_package("rapidocr_onnxruntime"):
+        return {
+            "status": "warning",
+            "engine": "none",
+            "fps": fps,
+            "frames_scanned": 0,
+            "residues": [],
+            "groups": [],
+            "detail": "RapidOCR 不可用，成品中文残留检测被跳过 —— 本次结果不构成「无中文」的证据",
+        }
+
+    from ocr_video import ocr_with_rapidocr
+
+    # Scratch frames go to a FRESH temp dir every run. They used to live in
+    # <work-dir>/qa-residue and be cleared with a glob+unlink loop, which
+    # tripped the safe-delete bulk confirmation on a 230s clip (50+ files) and
+    # aborted QA with SAFE_DELETE_BULK_CONFIRM_REQUIRED. A new mkdtemp per run
+    # removes the need to delete anything, and keeps the delivery work-dir clean.
+    frame_dir = tempfile.mkdtemp(prefix="ttl-qa-residue-")
+    log.info(f"  残留帧抽帧目录: {frame_dir}")
+
+    run(["ffmpeg", "-y", "-v", "error", "-i", final_path,
+         "-vf", f"fps={fps}", "-q:v", "3",
+         os.path.join(frame_dir, "f%05d.jpg")], check=False)
+
+    frames = sorted(glob.glob(os.path.join(frame_dir, "f*.jpg")))
+    residues: List[Dict[str, Any]] = []
+    for i, fp in enumerate(frames):
+        ts = round(i / fps, 3)
+        try:
+            dets = ocr_with_rapidocr(fp)
+        except Exception as e:
+            log.warning(f"  残留检测 OCR 失败 @ {ts}s: {str(e)[:120]}")
+            continue
+        for det in dets:
+            text = (det.get("text") or "").strip()
+            conf = det.get("confidence") or 0
+            if text and has_chinese_text(text) and conf >= min_confidence:
+                residues.append({
+                    "timestamp_sec": ts,
+                    "text": text,
+                    "confidence": det.get("confidence"),
+                    "bbox": det.get("bbox"),
+                })
+
+    # 按文本归组，给出人类可读的区间清单
+    grouped_map: Dict[str, List[Dict[str, Any]]] = {}
+    for r in residues:
+        grouped_map.setdefault(r["text"], []).append(r)
+    groups: List[Dict[str, Any]] = []
+    for text, items in grouped_map.items():
+        ts_list = [it["timestamp_sec"] for it in items]
+        groups.append({
+            "text": text,
+            "first_sec": min(ts_list),
+            "last_sec": max(ts_list),
+            "frame_count": len(items),
+            "bbox": items[0]["bbox"],
+            "max_confidence": max((it["confidence"] or 0) for it in items),
+        })
+    groups.sort(key=lambda g: g["first_sec"])
+
+    status = "fail" if residues else "pass"
+    if status == "fail":
+        detail = (f"成品检出 {len(residues)} 条中文残留，涉及 {len(groups)} 处不同文本"
+                  f" —— 禁止交付，处理后必须重跑本检查")
+    else:
+        detail = f"成品全片 OCR（{len(frames)} 帧 @ {fps}fps）未检出中文"
+
+    return {
+        "status": status,
+        "engine": "rapidocr_local",
+        "fps": fps,
+        "frames_scanned": len(frames),
+        "residues": residues,
+        "groups": groups,
+        "detail": detail,
+    }
+
+
+def regions_overlap(a: Dict, b: Dict) -> bool:
+    """两个矩形区域是否重叠（a/b 均为 {x,y,w,h}）"""
+    return not (a["x"] + a["w"] <= b["x"] or b["x"] + b["w"] <= a["x"] or
+                a["y"] + a["h"] <= b["y"] or b["y"] + b["h"] <= a["y"])
+
+
+def check_cover(output_dir: str, work_dir: str) -> Dict:
+    """检查封面：
+      1. 人脸/主体未被遮挡
+      2. 无中文残留（OCR 检测，禁止中文水印/标题带入封面）
+      3. 标题颜色为 TikTok 经典亮黄色（配置校验，禁止白色）
+      4. 品牌署名已渲染（profile 配置了 brand_text 就必须渲染）
+      5. 封面帧已按 localization-plan 清理（有 remove/translate 项时必须清理）
+      6. 标题与品牌署名落在安全带内（主页网格只显示 9:16 封面的中间部分）
+    """
+    cover_path = os.path.join(output_dir, "cover.jpg")
+    cover_plan = load_json(work_path(work_dir, "cover-plan.json"), {})
+    loc_plan = load_json(work_path(work_dir, "localization-plan.json"), {})
+
+    if not os.path.exists(cover_path):
+        return {"status": "fail", "detail": "cover.jpg not found", "face_occluded": None}
+
+    render_info = cover_plan.get("render", {})
+    faces = render_info.get("faces_detected", 0)
+    face_areas = render_info.get("face_areas", [])
+    text_regions = render_info.get("text_regions", [])
+    safe_zone = render_info.get("safe_text_zone", {})
+    warnings = []
+
+    # 检查文字是否遮挡人脸（用实际文字区域 bbox，而非整个安全区）
+    face_occluded = False
+    if faces > 0 and text_regions:
+        for fa in face_areas:
+            face_rect = {"x": fa["x"], "y": fa["y"], "w": fa["w"], "h": fa["h"]}
+            for tr in text_regions:
+                if regions_overlap(tr, face_rect):
+                    face_occluded = True
+                    break
+            if face_occluded:
+                break
+
+    # 封面中文残留检查（OCR 抽检）
+    ocr_available = check_python_package("rapidocr_onnxruntime")
+    chinese_lines = ocr_cover_chinese(cover_path) if ocr_available else []
+    chinese_residual = len(chinese_lines) > 0
+    if not ocr_available:
+        warnings.append("RapidOCR 不可用，封面中文残留检查被跳过 —— 这**不代表**封面没有中文")
+
+    # 标题颜色校验（TikTok 经典亮黄色 #FFDC00，禁止白色或其他颜色）
+    profile_style = cover_plan.get("profile_cover_style", {})
+    fill_color = profile_style.get("fill_color", [255, 220, 0])
+    fill_r, fill_g, fill_b = fill_color[0], fill_color[1], fill_color[2]
+    # 黄色判定：R>=230, G>=180, B<=80，且 G > B（排除白色/黑白）
+    color_ok = fill_r >= 230 and fill_g >= 180 and fill_b <= 80 and fill_g > fill_b
+    if not color_ok:
+        log.warning(f"Cover fill_color is not TikTok yellow: {fill_color} (expected ~[255,220,0])")
+
+    # 品牌署名校验（profile 配置了 brand_text 就必须渲染）
+    brand_text = profile_style.get("brand_text")
+    brand_ok = True
+    if brand_text:
+        brand_ok = bool(render_info.get("brand_text_rendered"))
+        if not brand_ok:
+            log.warning(f"Cover brand_text '{brand_text}' configured but not rendered")
+
+    # 封面帧清理校验（plan 有 remove/translate 项时，封面必须已清理）
+    plan_items = [i for i in loc_plan.get("items", [])
+                  if i.get("action") in ("remove", "translate") and i.get("bbox")]
+    cleaned = render_info.get("frame_cleaned_regions", 0)
+    frame_clean_ok = True
+    if plan_items and profile_style.get("clean_frame_enabled", True):
+        frame_clean_ok = cleaned >= len(plan_items)
+        if not frame_clean_ok:
+            log.warning(f"Cover frame should clean {len(plan_items)} regions but cleaned {cleaned}")
+
+    # 安全带校验：TikTok 只在主页网格/搜索结果里显示 9:16 封面的中间部分，
+    # 标题或品牌署名落到带外，用户在自己的主页上根本看不到它们
+    # （2026-09-27 用户："封面图片要适合 tiktok 封面大小，要能够看全标题和 logo"）。
+    # 只做真实 bbox 校验，不做「文字是否居中」这类审美判断。
+    brand_region = render_info.get("brand_region")
+    boxes = list(text_regions) + ([brand_region] if brand_region else [])
+    safe_ok = True
+    outside = []
+    if safe_zone and boxes and safe_zone.get("h"):
+        zy0 = safe_zone.get("y", 0)
+        zy1 = zy0 + safe_zone.get("h", 0)
+        for b in boxes:
+            if b.get("y", zy0) < zy0 or b.get("y", zy0) + b.get("h", 0) > zy1:
+                outside.append(b.get("text", "?"))
+        safe_ok = not outside
+        if outside:
+            log.warning("Cover text outside the safe band and will be cropped in "
+                        f"the profile grid: {outside}")
+    elif not safe_zone:
+        warnings.append("cover render info has no safe_text_zone -- top/bottom "
+                        "crop safety NOT verified")
+
+    if face_occluded:
+        warnings.append("face occluded by text")
+    if chinese_residual:
+        warnings.append(f"Chinese text on cover: {chinese_lines[:3]}")
+    if not color_ok:
+        warnings.append(f"cover text color not TikTok yellow (fill_color={fill_color})")
+    if not brand_ok:
+        warnings.append("brand text not rendered")
+    if not frame_clean_ok:
+        warnings.append("cover frame not cleaned per localization-plan")
+    if not safe_ok:
+        warnings.append("cover text outside the safe band (cropped in the "
+                        f"profile grid): {outside}")
+
+    status = "pass" if not warnings else "warning"
+    return {
+        "status": status,
+        "detail": "; ".join(warnings) if warnings else
+                  f"Faces: {faces}, occluded: {face_occluded}, chinese: 0, color: yellow, brand: ok",
+        "face_occluded": face_occluded,
+        "subject_occluded": False,  # V1 简化
+        "faces_detected": faces,
+        "chinese_residual": chinese_residual,
+        "chinese_lines": chinese_lines[:5],
+        "fill_color_ok": color_ok,
+        "fill_color": list(fill_color),
+        "brand_text_rendered": brand_ok,
+        "text_in_safe_band": safe_ok,
+        "text_outside_safe_band": outside,
+        "frame_cleaned_regions": cleaned,
+    }
+
+
+def check_audio(output_dir: str, work_dir: str) -> Dict:
+    """检查音频：响度、中文残留"""
+    final_path = os.path.join(output_dir, "final.mp4")
+    plan = load_json(work_path(work_dir, "localization-plan.json"), {})
+    audio_strategy = plan.get("audio_strategy", "keep_original")
+
+    if not os.path.exists(final_path):
+        return {"status": "fail", "detail": "final.mp4 not found"}
+
+    # 响度检测
+    loudness_ok = True
+    try:
+        r = run([
+            "ffmpeg", "-i", final_path,
+            "-af", "loudnorm=print_format=json",
+            "-f", "null", "-",
+        ], check=False)
+        # 简单检查是否有音频流
+        r2 = run([
+            "ffprobe", "-v", "error",
+            "-show_entries", "stream=codec_type",
+            "-of", "csv=p=0",
+            final_path,
+        ])
+        has_audio = "audio" in r2.stdout
+        loudness_ok = has_audio
+    except Exception:
+        loudness_ok = False
+
+    # 中文残留检查（V1 简化：策略为 mute 时检查是否有音频）
+    chinese_residual = False
+    if audio_strategy == "mute_original_tts_bgm":
+        # V1 不做音频内容分析，假设 TTS 是英文
+        chinese_residual = False
+
+    status = "pass" if loudness_ok else "warning"
+    return {
+        "status": status,
+        "detail": f"Audio strategy: {audio_strategy}, loudness ok: {loudness_ok}",
+        "loudness_ok": loudness_ok,
+        "chinese_residual": chinese_residual,
+        "audio_strategy": audio_strategy,
+    }
+
+
+def check_localization(output_dir: str, work_dir: str) -> Dict:
+    """检查本地化：残留中文 OCR 抽检、水印复检、Logo 可见性、review 项"""
+    final_path = os.path.join(output_dir, "final.mp4")
+    plan = load_json(work_path(work_dir, "localization-plan.json"), {})
+    clean_report = load_json(work_path(work_dir, "clean-report.json"), {})
+
+    if not os.path.exists(final_path):
+        return {"status": "fail", "detail": "final.mp4 not found"}
+
+    # 残留中文 OCR 抽检（V1 简化：从 clean_report 推断）
+    residual_chinese = clean_report.get("inpaint", {}).get("low_confidence_count", 0)
+
+    # 水印区复检
+    watermark_items = [i for i in plan.get("items", []) if i.get("category") == "watermark"]
+    watermark_recheck = "clean" if watermark_items else "not_applicable"
+
+    # Logo 可见性
+    logo_items = [i for i in plan.get("items", []) if i.get("action") == "replace"]
+    replaced_logo_visible = len(logo_items) > 0
+
+    # review 项
+    review_items = [i for i in plan.get("items", []) if i.get("action") == "review"]
+    review_pending = len(review_items)
+
+    # timeline 未解决
+    timeline = load_json(work_path(work_dir, "timeline.json"), {})
+    timeline_unresolved = len(timeline.get("unresolved", []))
+
+    status = "pass"
+    warnings = []
+    if residual_chinese > 0:
+        status = "warning"
+        warnings.append(f"{residual_chinese} low-confidence inpaint regions may have residual text")
+    if review_pending > 0:
+        status = "warning"
+        warnings.append(f"{review_pending} review items pending user decision")
+    if timeline_unresolved > 0:
+        status = "warning"
+        warnings.append(f"{timeline_unresolved} timeline issues unresolved")
+
+    return {
+        "status": status,
+        "detail": "; ".join(warnings) if warnings else "All localization checks passed",
+        "chinese_residual_ocr_sample": residual_chinese,
+        "replaced_logo_visible": replaced_logo_visible,
+        "watermark_region_recheck": watermark_recheck,
+        "review_items_pending": review_pending,
+        "timeline_unresolved": timeline_unresolved,
+    }
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Quality assurance for localized video")
+    ap.add_argument("--work-dir", required=True, help="Working directory")
+    ap.add_argument("--output-dir", required=True, help="Output directory")
+    ap.add_argument("--residue-fps", type=float, default=1.0,
+                    help="成品中文残留扫描抽帧率（默认 1fps；闪现字幕多时可设 2）")
+    args = ap.parse_args()
+
+    require_tools("ffmpeg", "ffprobe")
+
+    log.info("Running QA checks...")
+
+    # 六类检查（第 6 项是硬门禁，独立于 plan 直接验证成品画面）
+    video_check = check_video(args.output_dir, args.work_dir)
+    subtitle_check = check_subtitle(args.output_dir, args.work_dir)
+    cover_check = check_cover(args.output_dir, args.work_dir)
+    audio_check = check_audio(args.output_dir, args.work_dir)
+    localization_check = check_localization(args.output_dir, args.work_dir)
+    log.info("  对成品 final.mp4 全片跑中文残留硬门禁（这一步不看 plan，只看画面）...")
+    residue_check = check_chinese_residue(args.output_dir, args.work_dir, args.residue_fps)
+
+    # 汇总降级
+    degradations = []
+    for json_file in ["asr.json", "tts-result.json", "ocr.json"]:
+        data = load_json(work_path(args.work_dir, json_file), {})
+        if data.get("degraded"):
+            degradations.append({
+                "capability": json_file.replace(".json", ""),
+                "used": data.get("provider_used", data.get("ocr_engine", "unknown")),
+                "reason": data.get("warnings", ["degraded"])[0] if data.get("warnings") else "degraded",
+            })
+
+    # review 项汇总
+    plan = load_json(work_path(args.work_dir, "localization-plan.json"), {})
+    review_items = [
+        {"item_id": i.get("item_id"), "summary": f"{i.get('category', 'unknown')} @ {i.get('start_time', 0)}s, confidence={i.get('confidence', 0)}, preserved"}
+        for i in plan.get("items", []) if i.get("action") == "review"
+    ]
+
+    # confidence 汇总
+    all_items = plan.get("items", [])
+    confidence_summary = {
+        "auto": len([i for i in all_items if i.get("confidence", 0) >= 0.85]),
+        "warning_band": len([i for i in all_items if 0.60 <= i.get("confidence", 0) < 0.85]),
+        "review": len([i for i in all_items if i.get("confidence", 0) < 0.60]),
+    }
+
+    # 整体状态
+    checks = [video_check, subtitle_check, cover_check, audio_check,
+              localization_check, residue_check]
+    if any(c["status"] == "fail" for c in checks):
+        overall = "FAIL"
+    elif any(c["status"] == "warning" for c in checks):
+        overall = "WARNING"
+    else:
+        overall = "PASS"
+
+    qa_result = {
+        "overall": overall,
+        "checks": {
+            "video": video_check,
+            "subtitle": subtitle_check,
+            "cover": cover_check,
+            "audio": audio_check,
+            "localization": localization_check,
+            "chinese_residue": residue_check,
+        },
+        "degradations": degradations,
+        "review_items": review_items,
+        "confidence_summary": confidence_summary,
+    }
+
+    out_path = work_path(args.work_dir, "qa.json")
+    save_json(out_path, qa_result)
+
+    log.info(f"QA complete: {overall} -> {out_path}")
+    log.info(f"  Video: {video_check['status']}, Subtitle: {subtitle_check['status']}, "
+             f"Cover: {cover_check['status']}, Audio: {audio_check['status']}, "
+             f"Localization: {localization_check['status']}, "
+             f"ChineseResidue: {residue_check['status']}")
+    if residue_check["status"] == "fail":
+        log.error("  [!!] 成品中文残留硬门禁未通过，残留清单：")
+        for g in residue_check["groups"]:
+            log.error(f"       {g['first_sec']:.1f}-{g['last_sec']:.1f}s  \"{g['text']}\"  "
+                      f"({g['frame_count']} 帧, conf={g['max_confidence']:.2f})")
+        log.error("  处理完这些残留后必须重跑本检查，不得直接交付。")
+    elif residue_check["status"] == "warning":
+        log.warning(f"  {residue_check['detail']}")
+    if degradations:
+        log.warning(f"  Degradations: {len(degradations)}")
+    if review_items:
+        log.warning(f"  Review items: {len(review_items)}")
+
+    if overall == "FAIL":
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

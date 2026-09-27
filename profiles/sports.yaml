@@ -1,0 +1,74 @@
+# Sports Profile - 通用体育内容风格
+# 适用于足球、橄榄球、棒球、网球等各类体育内容
+
+name: sports
+display_name: "General Sports"
+language: en
+region: US
+
+tone:
+  primary: "energetic, exciting, competitive"
+  caption: "punchy, action-oriented, use sports emojis"
+  translation: "natural sports commentary, preserve excitement and competition"
+
+caption_style:
+  max_length: 150
+  emoji_count: 3
+  use_hashtags_in_caption: true
+  cta: "Follow for more sports highlights! ⚽🏈⚾"
+
+hashtag_rules:
+  max_count: 5
+  must_include: []
+  preferred: ["#Sports", "#Highlights", "#Goal", "#Touchdown", "#HomeRun", "#Champions", "#Athlete"]
+  avoid: []
+
+cover_style:
+  canvas:
+    width: 1080
+    height: 1920
+  font_chain: ["Anton", "Impact", "Arial Black", "sans-serif"]
+  font_size: 110
+  style: "bold_high_contrast"
+  contrast_boost: true
+  headline_max_words: 5
+  headline_min_words: 2
+  fill_color: [255, 220, 0]  # TikTok 经典亮黄色 #FFDC00，禁止白色
+  stroke_color: [0, 0, 0]
+  stroke_width: 4
+  shadow: true
+  shadow_color: [0, 0, 0, 180]
+  shadow_offset: 3
+  face_protection: true
+  subject_protection: true
+  face_margin_pct: 0.05
+  # 安全区是**平台约束**，不是风格选项：TikTok 主页网格/搜索结果只显示 9:16 封面的
+  # 中间部分（多数资料 3:4 = y240–1680，少数 1:1 = y420–1500）。取交集 = 中心
+  # 1080×1080（0.22/0.22）。旧值 0.10/0.15（= y192–1632）连 3:4 窗口都在外面，
+  # 标题和 logo 照样被裁 —— 2026-09-27 与 nba profile 对齐修正（见 SKILL.md 8.3）。
+  safe_zone_top_pct: 0.22
+  safe_zone_bottom_pct: 0.22
+  safe_zone_side_pct: 0.07
+  # 画面与文字的关系：fill = 画面铺满安全带、文字压在上面；band = 画面只占文字之间的横条
+  picture_mode: fill
+
+bgm_style:
+  preferred: ["high_energy", "sports_anthem", "electronic", "rock"]
+  bpm_range: [120, 170]
+  mood: "exciting, competitive, triumphant"
+  example_styles:
+    - "Sports anthem - driving beat for highlights"
+    - "Electronic hype - for fast-paced action"
+    - "Epic orchestral - for championship moments"
+  note: "Style directions only. User must provide actual audio files."
+
+post_style:
+  tone: "energetic, friendly, knowledgeable"
+  hashtag_count: 5
+  cta: "Follow for more sports content! 🏆"
+
+classification_preferences:
+  logo_replace_enabled: true
+  watermark_remove_enabled: true
+  subtitle_translate_enabled: true
+  preserve_scene_text: false

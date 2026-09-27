@@ -1,0 +1,180 @@
+# TikTok Video Localizer - Provider 配置
+# AI 能力：按顺序 fallback；每次降级必须写 provider_used + degraded 字段
+# 确定性本地工具：不是 Provider，不参与 fallback；缺失 = 环境问题，退出码 2
+
+# ============================================================
+# AI 能力（走 fallback 链）
+# ============================================================
+ai_capabilities:
+
+  vision:
+    description: 视频理解 / 帧分析 / 主体检测
+    fallback_chain:
+      - agent_native          # 宿主 Agent 自带的视觉能力（首选）
+      - remote_vision         # 远程 Vision API（如 GPT-4V、Claude Vision）
+      - degraded_ocr_asr_only # 降级：仅凭 OCR+ASR+probe 做理解（无 Vision）
+    on_total_failure: degraded_ocr_asr_only
+    degradation_note: >
+      Vision 不可用时，video-understanding.json 标记 degraded:true, basis:"ocr_asr_only"；
+      分类照常（证据包不依赖 Vision），但 caption/cover 文案质量下降 → QA WARNING
+
+  asr:
+    description: 语音转写 / 中文旁白检测
+    fallback_chain:
+      - agent_native          # 宿主 Agent 自带的 ASR
+      - cloud_asr             # 远程 ASR API
+      - whisper_local         # 本地 Whisper（tiny/base 模型，笔记本可跑）
+    on_total_failure: assume_no_narration
+    degradation_note: >
+      ASR 完全不可用时，无法判定 has_chinese_narration → 保守走 keep_original
+      （宁可保留原声也不误静音），字幕仅来自 OCR 翻译 → QA WARNING 明示"未做语音转写"
+
+  tts:
+    description: 英文语音合成
+    fallback_chain:
+      - agent_native          # 宿主 Agent 自带的 TTS
+      - cloud_tts             # 远程 TTS API
+      - local_tts_cli         # 本地 TTS CLI（如 edge-tts、piper，需用户安装）
+      - skip_with_warning     # 跳过 TTS，仅字幕
+    on_total_failure: skip_with_warning
+    degradation_note: >
+      有中文旁白但无 TTS：静音原轨 + 无配音 + 英文字幕 + BGM（视频仍可用，靠字幕传达）
+      → QA WARNING
+
+  translation:
+    description: 中文→英文翻译（TikTok 原生风格，非直译）
+    fallback_chain:
+      - agent_native          # 翻译天然由宿主 Agent 完成
+    on_total_failure: fatal
+    degradation_note: >
+      翻译不视为独立故障点；Agent 不可用则整个 Skill 不运行（宿主责任）
+
+  inpainting:
+    description: 画面修复 / 文字移除后的背景修复
+    fallback_chain:
+      - remote_inpainting     # 远程 AI inpaint（可选，默认不用）
+      - opencv_inpaint        # OpenCV inpaint（Telea/NS，本地确定性）
+      - clone_patch           # 克隆修补（从相似区域复制）
+      - crop                  # 裁剪（仅边缘区域）
+    on_total_failure: leave_as_is_with_warning
+    degradation_note: >
+      清理置信度低的区域如实标 LOW；QA 对水印区复检，残留→WARNING（不谎称已清除）
+
+  ocr:
+    description: 画面文字识别
+    fallback_chain:
+      - rapidocr_local        # RapidOCR/onnxruntime：唯一默认引擎（初始化约 2.6s）
+      # 刻意不配置 tesseract / paddleocr 兜底：
+      #   - tesseract 对视频中文描边美术字召回率≈0，兜底等于假装成功；
+      #   - paddleocr 与 rapidocr 同属 PP-OCR 系，盲区重合，交叉验证无收益。
+      #   静默降级会让「能力缺失」伪装成「没有发现问题」，必须避免。
+      #   排障时用 ocr_video.py --engine paddleocr|tesseract 显式指定。
+    on_total_failure: skip_text_processing
+    degradation_note: >
+      无 OCR：文字类处理全部跳过，仅走 ASR 字幕翻译路径 → QA WARNING "画面文字未处理"。
+      ⚠️ 此时**不得**把「成品无中文残留」当成已确认事实；qa.json 的
+      chinese_residue 检查会是 warning 而非 pass。
+
+  web_search:
+    description: BGM 趋势搜索 / 热点信息
+    fallback_chain:
+      - agent_search          # 宿主 Agent 自带的搜索能力
+      - skip                  # 跳过搜索
+    on_total_failure: skip
+    degradation_note: >
+      无搜索：仅按 profile 的 bgm_style 从本地曲库/用户 Asset 选择，
+      推荐段落标注"未获取趋势数据"，绝不虚构 Trending 属性
+
+  semantic_match:
+    description: OCR 文本与 ASR 文本的语义匹配（可选增强）
+    fallback_chain:
+      - agent_native          # 宿主 Agent / LLM 判断
+      - embedding_provider    # Embedding 相似度
+      - skip                  # 跳过，仅用 asr_text_overlap（词汇重叠）
+    on_total_failure: skip
+    degradation_note: >
+      semantic_match 是可选增强；脚本产出时恒为 null，由 Agent 按需填写。
+      asr_text_overlap 只是词汇重叠（中文 char-bigram Jaccard / 英文 word Jaccard），
+      不是语义，不可混用。
+
+  image_gen:
+    description: 封面图像生成（V1 默认不用，cover 为真实帧+排版）
+    fallback_chain:
+      - skip                  # V1 默认不用 ImageGen
+    on_total_failure: skip
+    degradation_note: >
+      V1 cover 为真实帧+文字排版，不生成图；ImageGen 为 V2+ 可选能力
+
+# ============================================================
+# 确定性本地工具（不是 Provider，不参与 fallback）
+# ============================================================
+deterministic_tools:
+  - name: ffmpeg
+    description: 视频处理 / 抽帧 / 混音 / 烧录字幕
+    required: true
+    install_hint: "brew install ffmpeg (macOS) / apt-get install ffmpeg (Ubuntu)"
+  - name: ffprobe
+    description: 视频元数据探测
+    required: true
+    install_hint: 随 ffmpeg 一起安装
+  - name: opencv
+    description: 图像处理 / inpaint / 人脸检测
+    required: true
+    install_hint: "pip install opencv-python"
+    python_package: opencv-python
+  - name: pillow
+    description: 图像合成 / Logo 贴图 / 封面排版
+    required: true
+    install_hint: "pip install pillow"
+    python_package: pillow
+  - name: numpy
+    description: 数值计算
+    required: true
+    install_hint: "pip install numpy"
+    python_package: numpy
+  - name: pyyaml
+    description: YAML 配置解析
+    required: true
+    install_hint: "pip install pyyaml"
+    python_package: pyyaml
+
+# 可选本地工具（不强制，缺失时对应能力走 fallback）
+optional_tools:
+  - name: paddleocr
+    description: 本地 OCR（中文推荐）
+    install_hint: "pip install paddlepaddle paddleocr"
+    python_package: paddleocr
+  - name: tesseract
+    description: 本地 OCR（备选）
+    install_hint: "brew install tesseract tesseract-lang (macOS)"
+  - name: whisper
+    description: 本地 ASR
+    install_hint: "pip install openai-whisper"
+    python_package: openai-whisper
+  - name: edge-tts
+    description: 本地 TTS CLI（备选）
+    install_hint: "pip install edge-tts"
+    python_package: edge-tts
+
+# ============================================================
+# 可选本地 TTS CLI 模板（Agent 无 TTS 能力时启用）
+# ============================================================
+local_tts_cli:
+  enabled: false
+  # 示例：edge-tts
+  # cmd: ["edge-tts", "--voice", "en-US-GuyNeural", "--text", "{text}", "--write-media", "{out}"]
+  # 示例：piper
+  # cmd: ["piper", "--model", "en_US-amy-medium", "--output_file", "{out}"]
+  cmd: null
+  voice: "en-US-GuyNeural"
+  sample_rate: 24000
+
+# ============================================================
+# 通用兜底原则（全链路一致）
+# ============================================================
+fallback_principles:
+  - 任何降级必须写入对应 JSON 的 provider_used + degraded 字段，并由 qa.json 汇总
+  - 不确定时宁可保留 + Warning，不可误删（confidence < 0.60 一律 review）
+  - 所有 fallback 终点都是"产物仍生成 + 如实披露"，而非中断或假装成功
+  - 确定性工具（FFmpeg/OpenCV/Pillow）缺失属于环境问题：README 安装指引 + 脚本启动时前置检查，直接报错退出（码 2），不做 fallback
+  - 热门不等于可商用：BGM 推荐必须标注 Licensing，V1 不下载商业音乐
