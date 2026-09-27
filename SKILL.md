@@ -82,6 +82,10 @@ input/
 > （2026-09-27 起）是 `analyze → cover → localize → post → qa`——封面在视频清理/
 > TTS/字幕之前出图。手工按 job 逐步驱动时也照此顺序：Job 1 之后先做 Job 3 封面，
 > 再做 Job 2 视频处理。
+>
+> ⚠️ **「封面优先」≠「占位并行」**：封面只是排在 localize 之前，文案
+> （`headline`/`sub`/`stat`/`tagline`）仍必须 Agent 写完**正式版**再渲染。
+> 不要用占位标题先出一版图、后面再返工——省下的那点时间会被「改一次封面」吃回去。
 
 ```
 ■ Job 1: analyze-video
@@ -289,6 +293,8 @@ python scripts/processed_log.py list
   （每个视频独立推导输出目录）。结束时打印 `Processed N / Skipped M` 汇总。
 - **封面优先**（2026-09-27）：Job 顺序改为 `analyze → cover → localize → post → qa`，
   封面在视频清理/TTS/字幕之前出图；用户自带封面图用 `--cover-image`。
+  **注意：封面只是「提前」不是「占位并行」**——文案必须 Agent 写完正式版再渲染，
+  不做「占位标题先出图再返工」。
 
 **Agent 手动流程（按 job 逐步驱动脚本时）必须遵守**：
 1. 拿到源视频先 `check`：已处理 → 直接告知用户"该视频已处理过，输出在 <output_dir>"，不重复跑；

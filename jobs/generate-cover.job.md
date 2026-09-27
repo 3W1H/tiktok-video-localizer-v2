@@ -42,6 +42,8 @@ CoverSpec、落盘。（2026-09-27 之前这里另有一套渲染器，标题画
 
 - 全大写，高冲击力；品牌署名 `Hoop Dynasty Daily` 由 profile.brand_text 自动落在底部
 - 可用 CLI 覆盖：`--headline/--sub/--stat/--tagline`
+- **本步是 Step 3 渲染的前置**：必须先写完正式文案再渲染，不做「占位标题先出图」
+  （封面优先只表示排在 localize 之前，不表示跳过文案；占位版后续必返工）
 
 ### Step 3: 渲染封面（Profile 驱动）
 ```bash
