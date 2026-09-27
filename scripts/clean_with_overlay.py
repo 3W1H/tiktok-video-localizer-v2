@@ -2,6 +2,10 @@
 """
 clean_with_overlay.py - 高级视频清理工具（黑色条覆盖 + 文字叠加 + 第一帧替换）
 
+[DEPRECATED] 正式交付请用 scripts/render_overlays.py（见 SKILL.md §12.5.2）。
+本脚本保留，仅供「封面图第一帧中文处理」（--first-frame-blackbar / --trim-start）
+与排障/一次性修补；它的黑条覆盖 + drawtext 叠加已被 render_overlays.py 取代。
+
 适用于中文文字区域固定在顶部/底部的视频，用黑色条覆盖比 delogo 更彻底，无波纹闪现。
 支持在黑色条上叠加英文标题和 logo 文字，支持替换第一帧（封面图中文处理）。
 
@@ -282,6 +286,10 @@ def main():
     ap.add_argument("--trim-start", type=float, default=0,
                     help="Trim N seconds from the beginning (for cover frames that last multiple frames). Audio is preserved via -c copy. e.g. --trim-start 0.2")
     args = ap.parse_args()
+
+    print("[DEPRECATED] clean_with_overlay.py 是 legacy 脚本，正式交付请用 "
+          "scripts/render_overlays.py（见 SKILL.md 12.5.2）。本脚本功能保留，"
+          "仅供封面第一帧中文处理 / 排障 / 一次性修补。", file=sys.stderr)
 
     require_tools("ffmpeg", "ffprobe")
     os.makedirs(args.work_dir, exist_ok=True)

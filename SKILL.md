@@ -165,8 +165,9 @@ input/
   3. **❌ 禁止**：用纯黑色条（drawbox color=black:t=fill）直接覆盖，黑呼呼一片看不到下面画面
   4. **❌ 禁止**：用 FFmpeg delogo 处理大区域（有波纹闪现、处理不彻底）
   - 去除中文后，在原位写上英文（translate 项）或英文 logo（replace 项）
-  - 工具：`scripts/inpaint_video.py`（支持 --inpaint + --blur-region + --overlay）
-  - 或 `scripts/clean_video.py --method opencv`（默认方式）
+  - 工具（正式交付唯一路径）：`scripts/render_overlays.py` —— 单 pass 完成「ROI 局部 inpaint 去原文 → Pillow 叠加英文」，见 §12.5.2
+  - legacy/排障（**不要拿它们做正式交付**）：`inpaint_video.py`（`--blur-region` 大区域模糊）、
+    `clean_video.py --method opencv`（流水线 Job2 基底）。职责与去留见 §9 工具表。
 - ASR 口播翻译（画面上无对应中文文字）不需要 removal，直接英文 TTS + 新字幕。
 - `action: review` 的项，clean_video.py 必须跳过且不视为失败；
   `action: replace` 必须有非空 replacement.asset，否则脚本以退出码 1 拒绝并提示。
@@ -359,13 +360,15 @@ python scripts/generate_cover.py --work-dir work --output-dir output \
 python scripts/generate_cover.py --work-dir work --output-dir output \
     --profile nba --cover-image input/cover.jpg --no-text
 
-# 清理视频时指定方法（ffmpeg 更快，opencv 适合复杂背景）
+# ===== 正式交付（唯一路径）→ scripts/render_overlays.py，见 §12.5.2 =====
+# 下面这几个脚本是 legacy / 排障 / 流水线基底，不要拿它们做正式交付（职责见 §9 工具表）
+
+# 清理视频时指定方法（流水线 Job2 基底；ffmpeg 更快，opencv 适合复杂背景）
 python scripts/clean_video.py --video input/source.mp4 --work-dir work \
     --method ffmpeg  # 默认 ffmpeg，可选 opencv
 
-# 高级清理：黑色条覆盖 + 文字叠加 + 第一帧中文覆盖 + 去掉开头封面帧（适合中文固定在顶部/底部的视频）
-# 比 delogo 更彻底，无波纹闪现
-# ⭐ 推荐用 --first-frame-blackbar 只在第一帧覆盖中文（音频完全保留，-c:a copy）
+# [legacy] 高级清理：黑色条覆盖 + 文字叠加 + 第一帧中文覆盖 + 去掉开头封面帧（适合中文固定在顶部/底部的视频）
+# 仅保留用于「封面图第一帧中文处理」：⭐ 用 --first-frame-blackbar 只在第一帧覆盖中文（音频完全保留，-c:a copy）
 # ⭐ 如果封面图持续多帧，用 --trim-start 0.2 去掉开头0.2秒（音频保留）
 # 避免用 --replace-first-frame（会重新编码音频，可能导致爆音/质量下降）
 python scripts/clean_with_overlay.py --video input/source.mp4 --output output/final.mp4 \
@@ -375,18 +378,12 @@ python scripts/clean_with_overlay.py --video input/source.mp4 --output output/fi
     --trim-start 0.2 \
     --overlay-text "text='BLAKE GRIFFIN\nTOP 20 DUNKS':y=195:fontsize=38:color=white"
 
-# 生成艺术化 logo 图片（渐变+描边+外发光+高光），然后用 FFmpeg overlay 叠加到视频
-python -c "
-import sys; sys.path.insert(0, 'scripts')
-from clean_with_overlay import generate_artistic_logo
-generate_artistic_logo('Hoop Dynasty Daily', 'work/logo.png', font_size=36)
-"
-ffmpeg -i input.mp4 -i work/logo.png -filter_complex \
-  "[0:v][1:v]overlay=x=(W-w)/2:y=965" -c:a copy output.mp4
+# [legacy] 生成艺术化 logo 图片——已被 cover_engine.draw_brand_lockup 取代（见 §8），
+# 封面/视频内 logo 走 render_overlays.py / make_cover.py，不要再用这个
 
-# ⭐ 高级清理：inpaint 去除中文 + 模糊遮罩 + 英文叠加（推荐，比黑色条自然）
+# [legacy] inpaint 去除中文 + 模糊遮罩 + 英文叠加（仅排障/一次性修补）
 # 大区域（顶部标题）用 --blur-region 模糊遮罩，小区域（底部水印/字幕）用 --inpaint 去除
-# 处理后能看到原来中文字下面的画面，不是黑呼呼一片
+# 处理后能看到原来中文字下面的画面，不是黑呼呼一片；正式交付走 render_overlays.py
 python scripts/inpaint_video.py --video input/source.mp4 --output output/final.mp4 \
     --blur-region "top_title:y=170:h=160" \
     --inpaint "bottom_watermark:y=960:h=70" \
@@ -736,14 +733,12 @@ nba 的 `["Anton","Impact","Arial Black","sans-serif"]` 实测落到 **Impact**�
 
 **问题**：黑色条遮罩太突兀，黑呼呼一片，看不到原来中文字下面的画面。
 
-**解决方案（按区域大小选择）**：
-1. **大区域（顶部标题，>100像素高）**：用 `--blur-region` 模糊遮罩
-   - 高斯模糊（radius=15）+ 半透明黑色遮罩（alpha=180）
+**解决方案（按区域大小选择，处理原则与具体工具见下表）**：
+1. **大区域（顶部标题，>100像素高）**：高斯模糊 + 半透明黑色遮罩
    - 能看到下面画面的模糊轮廓，比纯黑条自然
-2. **小区域（底部水印/字幕，<100像素高）**：用 `--inpaint` 去除
-   - OpenCV INPAINT_TELEA 算法，用周围像素填充
-   - 处理后能看到原来中文字下面的画面
-3. **然后在处理后的区域写上英文**：用 `--overlay` 叠加英文标题和 logo
+2. **小区域（底部水印/字幕，<100像素高）**：OpenCV INPAINT_TELEA inpaint
+   - 用周围像素填充，处理后能看到原来中文字下面的画面
+3. **然后在处理后的区域写上英文**：叠加英文标题和 logo
 
 **工具（2026-09-27 澄清，别再选错）**：
 
@@ -756,6 +751,10 @@ nba 的 `["Anton","Impact","Arial Black","sans-serif"]` 实测落到 **Impact**�
 
 ⚠️ 之前本节直接推 `inpaint_video.py`，与 §12.5.2「不要再用 `clean_video.py` 的 drawtext
 路径做正式交付」互相矛盾，导致同一个任务有两种做法。**以本表为准。**
+
+`clean_with_overlay.py` 与 `inpaint_video.py` 已加运行时 `[DEPRECATED]` 警告（直接跑会在
+stderr 提示改走 `render_overlays.py`），但**功能完整保留**——它们的独有用途仍在：
+`--first-frame-blackbar`（封面第一帧中文）、`--blur-region`（大区域模糊）见下方参数说明。
 
 `inpaint_video.py` 参数（供排障参考）：
 - `--blur-region`：模糊遮罩区域（大区域）

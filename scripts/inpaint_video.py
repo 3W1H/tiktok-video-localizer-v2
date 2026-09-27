@@ -2,6 +2,10 @@
 """
 inpaint_video.py - 用 OpenCV inpaint 去除视频中的中文文字，然后叠加英文
 
+[DEPRECATED] 正式交付请用 scripts/render_overlays.py（见 SKILL.md §12.5.2）。
+本脚本保留，仅供「大区域模糊遮罩」（--blur-region）与排障/一次性修补；
+它的文字叠加是细体、无投影、无自动去重叠，不要拿它做正式交付。
+
 处理流程：
 1. 逐帧读取视频
 2. 对指定区域进行 inpaint（用周围像素填充，去除中文）
@@ -257,6 +261,10 @@ def main():
     ap.add_argument("--blur-alpha", type=int, default=180,
                     help="Semi-transparent overlay alpha (0-255, default: 180)")
     args = ap.parse_args()
+
+    print("[DEPRECATED] inpaint_video.py 是 legacy 脚本，正式交付请用 "
+          "scripts/render_overlays.py（见 SKILL.md 12.5.2）。本脚本功能保留，"
+          "仅供大区域模糊遮罩 / 排障 / 一次性修补。", file=sys.stderr)
 
     require_tools("ffmpeg", "ffprobe")
 
