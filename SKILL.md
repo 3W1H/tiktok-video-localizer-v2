@@ -266,9 +266,24 @@ input/
 
   | 量什么 | 怎么量 | 映射到 |
   |---|---|---|
-  | 基频 F0 中位数 | 逐 40ms 帧自相关，只取清晰帧（峰/零延迟 > 0.3）的中位数 | 性别 → 音色；相对参考的偏移 → `pitch`（夹 ±25Hz） |
+  | 基频 F0 **低分位 p25**（不是中位数！） | 逐 40ms 帧自相关，只取清晰帧（峰/零延迟 > 0.3）；中位数只作透明性指标一并记录 | **性别 → 音色**；相对参考的偏移 → `pitch`（夹 ±25Hz） |
   | 语速 | 汉字数 ÷ 解说总时长 | 相对 4.5 字/s 的偏离 → `rate`（夹 ±25%） |
   | 解说段能量 | 解说段 RMS 与全片 RMS 之差 | 情绪强度 → `energetic` / `neutral` / `calm` |
+
+  ⚠️ **性别判据必须用 p25，不能用中位数**（2026-09-28 修正）。
+  逐帧自相关法在高频段有**倍频（octave）假象**，叠加原片底噪/BGM 后**中位数会被系统性抬高**。
+  实测本批 03（中文男声解说）：中位数 166.7Hz > `F0_SPLIT_HZ`(165) → 旧判据给出**女声**（错），
+  但 p25 = 133.3Hz，且 **37% 的浊音帧落在 140Hz 以下** —— 女声的 F0 几乎不可能低于 ~150Hz，
+  不可能有这么大比例的低频帧。改用 p25 后判对男声。
+  交叉验证手段（有争议时用）：手写 YIN（累积均值归一化差分函数，天然免疫倍频）取 p25；
+  或出**窄带谱图**（窗 100ms → 10Hz 分辨率）直接数谐波梳间距，男声 ~110-130Hz、女声 ~200-250Hz。
+
+  ⚠️ **`pitch` 覆盖时要谨慎**：`pitch` 是用「F0 相对同性别参考值的偏移」算的，
+  若 F0 本身被倍频/BGM 污染，算出的 `pitch` 也会偏高（03 算出 +19Hz）。
+  给神经语音抬音高**正是"机械感"的来源**。用户明确反感机械感 TTS 时，
+  建议显式 `--tts-pitch +0Hz`，不要跟着被污染的估计值走。
+  同理 `rate`：中文「字/秒」线性外推到英文「词/秒」并不成立（03 从 6.78 字/s 外推出 +25%，
+  而英文稿实际只有 2.17 词/s，根本不需要加速）→ 先核算英文稿的词/秒，再决定要不要覆盖。
 
   产物 `work/narration-style.json` 的 `tts_params` 被 `audio_processor.py tts` 直接消费
   （`--voice/--rate/--pitch` 可覆盖）。音色映射表见 `analyze_narration.py::VOICE_MAP`。
@@ -283,6 +298,76 @@ input/
   详见 **§10.1「节奏匹配」**。一句话概括：用 `analyze_rhythm.py` 量视频（场景切换 +
   运动强度）、用 `analyze_bgm.py` 量 BGM（实测 BPM + 能量曲线 + drop），
   让 **BGM 的 drop 落在视频的高潮时刻**上，而不是把 BGM 从第 0 秒平铺到片尾。
+- ⭐ **`mute_original_tts_bgm` 的电平与 `--normalize`（2026-09-28 新增，本批 03 是首例）**
+  ⚠️ 走这条策略时**必须开 `make_audio_plan.py --normalize`**。
+  原因：该分支的混音是 `[0:a][1:a]amix=inputs=2:duration=longest`，而 ffmpeg 的 amix
+  **默认 `normalize=1`，会把每一路按 1/n 缩放** —— 两路输入各被压低约 6dB，
+  整条音轨最终比目标低 ~6dB。而 `loudness_normalized` 在 plan 里**默认 true**
+  （`audio_plan.get(..., True)`），一旦显式写成 `false` 就会被跳过、无人兜底。
+  只有 `loudness_normalized: true` 才会执行 `loudnorm=I=-16:TP=-1.5:LRA=11`，既补回电平
+  又顺带压住削顶（本批 BGM 母带普遍 max_volume = 0.0 dBFS）。
+  `volume_db` **不要沿用 BGM-only 场景的 −12**：那个值是"音乐当主角"。TTS 场景里
+  BGM 是**垫底**，用该分支代码自己的默认 **−18**。
+  定值前先实测两边响度，别拍脑袋：
+  `ffmpeg -i <文件> -af volumedetect -f null -`（注意**别加 `-v error`**，
+  volumedetect 走 info 级，加了就什么都看不到）。
+  本批 03 实测：edge-tts GuyNeural +10% 的 `mean_volume` = **−20.9dB**，
+  `Future Gladiator` = **−12.7dB** —— 不加衰减的话**音乐比人声响 8.2dB**，
+  人声会被埋掉。
+  ⚠️ 该分支**忽略 plan 里的 fade_in/out**（`run_mix` 硬编码传 `0.0, 0.0`），
+  在人声上做 BGM 淡入淡出会很突兀 —— 填 0 即可，不用纠结。
+- ⭐ **英文稿天然比中文长 → 用「级联排布」吸收，别硬砍稿**（2026-09-28 新增，03 首例）
+
+  先说清约束链（这条链决定了一切，03 之前没人写下来过）：
+  `render_overlays.sync_timeline` 把**字幕显示窗**写回 `timeline.json` 的 `final_start/final_end`，
+  而 `audio_processor.run_mix` 拿 `final_start` 做 `adelay` 摆放每一段 TTS。
+  ⇒ **字幕窗起点 == 该段语音的起播点**，且 **`run_mix` 只做 adelay/amix、不按时长压缩**。
+  ⇒ **窗口短于 TTS 时长 = 这句话压到下一句上（听感糊）**，这不是"警告"，是硬故障。
+
+  实测（03，245s 片）：英文稿 TTS 总量 **197.5s vs 中文原声窗 187.6s（+5.3%）**。
+  两种 remedy（`tts_timing.py` 的契约里都写了），**一起用**：
+
+  1. `shift_into_gap` —— **级联排布**（首选，免费）：
+     ```
+     place = cue.start                      if prev is None
+           = max(cue.start, prev_end + GAP)  otherwise     # GAP = 0.08s
+     ```
+     某条装不下就**顺延**给下一条，下一条有余量就吸收；某条讲完后**整列回弹到自身原始起点**，
+     所以漂移**不会跨过静音间隙累积**。03 实测最大漂移 **1.28s**，cue 15 前归零，视觉无感。
+     实现见 `tiktok-batch/split_cues.py --tts-probe`。
+     反面：按"每个 cue 独立装进自己的窗口"排布会逼你砍掉 cue 9 那句收尾（省 1.0s），
+     而级联把这 1.0s 白送给了你 —— **刚性分窗是过度约束**。
+  2. `shorten_translation` —— 只补级联吸收不掉的残差：
+     **必须用真引擎逐条量，不能凭字数猜**。因为每条字幕是**独立一次 TTS**，
+     自带句尾停顿，**分段后的总时长 > 整段朗读的时长**（03 的 cue 9：整段 11.04s，拆 4 条后 12.50s）。
+     做法：`pick_fit.py` 把每个改写候选都真跑一遍 edge-tts 量时长，选**能装下的最长版本**，
+     这样"因时间而丢的内容"被压到最小。03 只压缩措辞、没删任何一个事件。
+
+  ⚠️ **必须在渲染前用真引擎预量**：`tts_probe.py`（与管线同参数跑 `edge-tts`，逐条 ffprobe 量时长）。
+  不预量就会"渲染 19 分钟 → 才发现一半语音叠在一起"。
+  ⚠️ 预量与渲染时各跑一次 TTS，时长有 ~1–2% 抖动，所以**边界要留 0.08s 间隔**。
+- ⭐ **英文单行字幕有硬长度上限，且渲染器不换行**（2026-09-28 新增）
+
+  `render_overlays.build_overlays` 对 subtitle 类做：
+  ```python
+  max_w = frame_w - 70
+  fit_font(font_path, text, 40, max_w)   # min_size=18 是硬下限
+  draw_centered(...)                     # 只 draw.text 一次 —— 不支持多行
+  ```
+  字号缩到 18px 后**继续超宽就横向溢出被裁**。实测 **1280 宽 + Arial Bold 40px ≈ 62 字符**
+  （用**真实像素**判定，别数字符：`"I never pay fees."` 与 `"WOULD NEVER PAY FEES"`
+  同长但宽度差很多）。
+  03 原始 21 条里有 **18 条超 62 字符**（最长 171）→ 直接渲染就是一堆 ~18px 且左右被裁的不可读字幕。
+  ⇒ **翻译时必须按宽度拆行**，不是等渲染时缩字号。拆分策略（`split_cues.py`）：
+  先按句末标点切句 → 仍超宽就递归找"最佳断点"（左右两半都放得下、优先落在 `, ; : —` 之后
+  或开引号之前、**禁止以 the/a/of/and 这类虚词结尾**）。03：21 cue → 56 行，最长 1203px / 1210px。
+  ⚠️ 拆行会让 TTS 段数变多 → 段尾停顿也变多 → **总时长变长**（见上条），拆完要重新预量。
+- ⚠️ **`plan_narration.py` 产出的 item 一律是 `action="remove"`**（它只负责"清理"，
+  "替换"由上游 Agent 决定）。凡是**带 `target_text` 的字幕类项，必须提升成 `action="translate"`**：
+  渲染层对 remove/translate 一视同仁（都要求有 target_text 就画），但
+  `render_subtitles.generate_srt` 与 `qa_video.py` 的 localization 检查**按 action 分类统计** ——
+  不提升就会出现「translate: 0 / remove: 57」这种明显不对的 plan。
+  实现见 `tiktok-batch/norm_narr.py`（它同时负责 y 归一化与 x 对称化）。
 - **ASR 完全不可用** → 保守走 `keep_original` + WARNING（宁可保留原声也不误静音）
 
 **`remove_original_bgm_only` 策略说明**：
@@ -897,8 +982,21 @@ nba 的 `["Anton","Impact","Arial Black","sans-serif"]` 实测落到 **Impact**�
   大区域（>100px 高）用高斯模糊 + 半透明黑遮罩，小区域（≤100px）用 OpenCV inpaint。
 - ⚠️ 封面会从 720p 放大到 1080×1920，**模糊必须比视频清理更重**
   （默认 `blur_radius=25 / blur_alpha=210`），否则放大后中文笔画仍可辨认。
-- 清理项数记录在 `cover-plan.json` 的 `render.frame_cleaned_regions`，QA 会校验。
+- 🔴 **只清理「封面帧那一刻真的在屏」的项**（`plan_items_at()` 按 `start_time`/`end_time`
+  过滤，`generate_cover.py` 用 `selected_frame.timestamp_sec` 传入）。
+  **封面是单帧快照，plan 覆盖全片** —— 不过滤就会把全片区域都擦到这一帧上：
+  2026-09-29 的 03（湖人传奇羁绊）plan 里唯一的 `caption_overlay` remove 项是
+  0.6–3.4s 的中屏中文弹窗（bbox h=128 ⇒ 走「大区域」分支 = 高斯模糊 + 82% 压暗），
+  封面帧取在 t=236.85s，结果**在科比脸上压出一块 361×191 的黑方块**；
+  同一帧的源画面本来是干净的（抽帧验过），黑块 100% 是封面渲染引入的。
+  判据：`cover-plan.json` 的 `render.frame_cleaned_regions` >> `frame_clean_expected`
+  （03 是 65 vs 0），或 `frame_clean_at_sec` 落在任何 item 的时间窗之外。
+- 清理项数记录在 `cover-plan.json` 的
+  `render.frame_cleaned_regions` / `frame_clean_expected` / `frame_clean_at_sec`，
+  QA 用 `expected`（=该帧在屏项数）而非「全片项数」做校验。
 - 清理在**裁剪缩放之前**做，bbox 以源帧像素坐标系为准。
+- 副作用提示：清理结果会**同时影响画面与背景虚化层**（`backdrop: blur` 是同一张
+  `img` 的模糊版），所以擦错区域的痕迹是"两处"：主画面一块 + 背景一抹。
 
 #### 8.7 QA 与交付前自检
 
@@ -914,7 +1012,10 @@ nba 的 `["Anton","Impact","Arial Black","sans-serif"]` 实测落到 **Impact**�
    做重叠检测。⚠️ **禁止用整个安全区做判定**（会导致人脸在安全区内但文字没压到也误报）。
    人脸坐标由 `generate_cover.py` 用 `picture_src` 映射到画布坐标系，
    不在可见画面带里的人脸会被丢弃。
-5. 封面帧已按 localization-plan 清理（`frame_cleaned_regions` ≥ plan 项数）。
+5. 封面帧已按 localization-plan 清理（`frame_cleaned_regions` ≥ `frame_clean_expected`）。
+   ⚠️ `frame_clean_expected` = **该帧(selected_frame.timestamp_sec)在屏的项数**，
+   不是全片项数 —— 用全片项数当分母会逼着 cover 去擦不存在的区域（见 §8.6）。
+   旧 cover-plan 没有该字段时，`check_cover` 就地按时间戳过滤，行为一致。
 6. **标题与品牌署名落在安全带内**（`text_in_safe_band`，按真实 bbox 复核）。
 
 封面按视频内容定制，**禁止模板化**（§12.6）：一开始 8 个封面全写 "MUST WATCH"，
@@ -1326,6 +1427,11 @@ python scripts/bgm_ledger.py resolve --bpm <rhythm.suggested_bpm> \
 3. **网搜到之后先 `resolve` 查本地，别盲目下载**：本地有且没用过就直接合成（省下载 + 省入册）；
    确需下载的才走 `bgm_ledger.py add --audio <文件> ...`（自动放进 `music/sports/` + 实测 BPM + 写登记）。
    Kevin MacLeod incompetech CDN 可直接 curl：`https://incompetech.com/music/royalty-free/mp3-royaltyfree/<Name>.mp3`（CC BY 3.0）。
+   曲名要 URL-encode（`In a Trap` → `In%20a%20Trap`），大小写按原名。
+   快速验证能不能下：`curl -s -o /tmp/t.mp3 -w '%{http_code} %{size_download}' -r 0-2000 <url>`，
+   期望 `206 2001` 且 `file /tmp/t.mp3` 认成 `Audio file with ID3`。
+   ⚠️ **别用 `curl -I` 判断**：HEAD 对存在的文件也返回 200 但 `size=0`，
+   过去据此误判成"直链 404、下载不可行"，才走了本地兜底（2026-09-28 复核纠正）。
 4. **一批视频内 BGM 不得重复，且只用没出过场的**：不靠人脑记，用 `resolve`（自动判"已用过"）
    + `record`（用完记一笔）。
    ⚠️ **`*_variant` 不算新歌** —— 母版与变体按同一首歌计数（`normalize_track_key`）。
@@ -1443,6 +1549,28 @@ python scripts/render_overlays.py \
 "JOKIC THE PASS MASTER" / "GRIFFIN CAR DUNK"），**禁止万能模板**。
 选帧与清帧标准见 §8.5 / §8.6。
 
+#### 12.6.1 封面标题的取值链（2026-09-29 新增，别再白跑一次封面）
+
+`generate_cover.py` 的优先级是**四层**：
+
+```
+--headline  >  cover-plan.json 的 headline  >  video-understanding.json 的 cover_headline  >  DEFAULT_HEADLINE("MUST WATCH")
+```
+
+- 🔴 **只把 `cover_headline` 写进 `post-content.json` 是没用的** —— 生成封面时根本不读那个文件。
+  Agent 该写的是 **`work/video-understanding.json`** 的 `cover_headline`
+  （`post-content.json` 的 `cover_headline` 只是给人看/给 post 用的）。
+  本批 05/06 都栽在这里：understanding 里忘了这个字段 → 静默落回 "MUST WATCH"。
+- 🔴 **`cover-plan.json` 一旦存在就永远压住 understanding**：它由首次生成时写入，
+  之后每次重跑都以它里的 `headline` 为准。所以**改文案要同时改两处**
+  （`cover-plan.json.headline` + `video-understanding.json.cover_headline`），
+  否则只改了 understanding、重跑封面还是旧标题（03 就是这样被"钉"住过一个版本）。
+- ✅ **交付前 1 秒自查**：`python -c "import json;print(json.load(open('<out>/work/cover-plan.json'))['headline'])"`
+  —— 出现 `MUST WATCH` 就是漏了这一步。
+- 重出封面很便宜（十几秒，不重渲视频）：`generate_cover.py --work-dir <work> --output-dir <out> --profile nba`。
+  但**封面变了就要重跑一次 QA**（`check_cover` 校验的是落盘的 `cover.jpg` 与 `cover-plan.json`）。
+
+
 ### 12.7 tiktok-post.md：每条独立写，禁止复制模板
 
 **踩坑**：7 个视频的 post.md 全是同一段 "NBA Highlights / Career highlights and best plays"，用户骂"怎么每一个都一样"。
@@ -1453,11 +1581,18 @@ python scripts/render_overlays.py \
 
 交付 final.mp4 + cover.jpg + tiktok-post.md 前，必须：
 1. 抽 ≥5 个时间点帧，肉眼检查：无中文残留、无黑块、logo 位置/大小对、无原水印。
+   ⚠️ 5 个点里**必须含「第 0 帧」、「最后 1 秒」、「片尾前 5 秒」各一帧** ——
+   片头卡/片尾卡是"只在首尾出现"的元素，抽中间帧永远看不见
+   （见 §14.6 片尾卡、§14.7 片头第 0 帧，09/02/03 实测踩坑）。
+   **第 0 帧只能显式取**（`-frames:v 1` 或 `select='eq(n\,0)'`）：
+   1fps 采样网格的起点不是 t=0，QA 的 `chinese_residue` 也照不到它（§14.7）。
 2. 抽音频片段确认：无中文人声（除非用户明确要保留原声）。
 3. cover.jpg 打开看：无网点、无黑块、标题黄字、品牌署名在。
 4. 分辨率正确：横版比赛 1280×720/960，不强行竖屏。
 5. BGM 不与同批其他视频重复。
 6. tiktok-post.md 不是模板套话。
+   ⚠️ 若成品**被有意裁短/变速**（如裁掉源频道片尾 CTA 卡），必须写
+   `work/originalize-result.json` 声明 `duration_sec`，否则 QA 的时长检查会 FAIL（见 §14.6）。
 
 ### 12.9 输出目录：最终产物直接输出视频名目录，禁止 output 子层（用户偏好 2026-09-24）
 
@@ -1804,6 +1939,165 @@ The Path of the Goblin King / Wallpaper(+v2)）。
   所以本类的质检等级**天花板就是 WARNING**，验收标准应是
   **「`chinese_residue` PASS + 四件套齐全」**，而不是死等 PASS。
 
+- 🔴 `clean_video.py::probe_color_args` **色彩别名表套错了作用域 → 整段渲染必挂（2026-09-28 修复）**。
+  这是本批最难查的一个 bug，两次排查都走偏，值得完整记录：
+
+  * **现象**：`render_parallel.py --segments 2` 两段都在 **1s / 5s** 内 rc=1；`render_overlays.py`
+    的 traceback 恒定在 `base_proc.stdin.write(frame.tobytes())`（或 `proc` 那行）报
+    `BrokenPipeError: [Errno 32] Broken pipe`；`seg_XX.mp4` / `base_XX.mp4` 均为 **0 字节**。
+    同一条命令行单独手搓复现（甚至用同一个源片、同一组参数）**rc=0，完全正常**。
+  * **真因**（`scripts/clean_video.py:71,87-90`）：`_TRC_ALIAS = {"bt470bg": "gamma28"}` 是给
+    **传输特性 `-color_trc`** 用的名称映射（ffprobe 按矩阵名报 `bt470bg`，而 ffmpeg 的
+    `AVColorTransferCharacteristic` 里叫 `gamma28`），但它被套在了**三个 flag 全部**上：
+    ```python
+    for flag, val in zip(("-colorspace", "-color_primaries", "-color_trc"), out):
+        args += [flag, _TRC_ALIAS.get(val, val)]   # ← 连 -colorspace 也被改写
+    ```
+    03 源片标记是 `bt470bg,smpte170m,bt470bg` ⇒ 产出 `-colorspace gamma28 ...` ⇒ libx264
+    报 `Unable to parse option value "gamma28"` / `Error setting option colorspace to value gamma28.`
+    ⇒ `Error initializing output stream 0:0` ⇒ ffmpeg **启动即退** ⇒ 上游只看到 BrokenPipe。
+    **02 源片是 `bt709,bt709,bt709`，别名键 `bt470bg` 永不命中 ⇒ 一路正常** —— 所以这个 bug
+    只在"源片 color_space 恰好等于别名键"时才现形（低频、难复现、极易误判成资源竞争）。
+    修复：`if flag == "-color_trc": val = _TRC_ALIAS.get(val, val)`（已验证
+    `oldbug rc=1 / fixed rc=0`）。
+  * **判据（下次 5 分钟定位，别再走弯路）**：`BrokenPipeError` + 输出 **0 字节** + 同命令手工复现正常
+    ⇒ **不是磁盘/内存/并发，是子进程启动就失败**。第一动作应是**把子进程 stderr 取回来**，
+    而不是去猜资源竞争或重跑。已加 `--ffmpeg-log` / 环境变量 `LOCALIZER_FFMPEG_LOG`
+    （落 `<path>.main` / `<path>.base`），并把 `proc`/`base_proc` 的死写前判活改成
+    `RuntimeError: <tag> ffmpeg exited early rc=... before frame N`，不再抛裸 BrokenPipe。
+    `render_parallel.py` 会自动给每段设成 `render_parts/seg_XX.ffmpeg.*`（**必须每段独立**，
+    否则多段用 "wb" 互相截断）。
+  * **附带的第二个陷阱**：`probe_color_args` 用**裸名 `ffprobe`**（靠 PATH 解析），
+    解析不到时 `except Exception: return []` **静默返回空** ⇒ 同一条视频在不同 PATH 下
+    **产出的色彩标记不同**。我自己手搓的探针就因此"通过"了（沙箱 PATH 没有 `~/.local/bin`），
+    把排查方向完全带偏。已改为 `shutil.which("ffprobe") or ~/.local/bin/ffprobe`。
+    **通用教训：任何 `except Exception: return <默认值>` 都会制造"同一输入两种行为"，
+    排查时必须先确认被测函数真的执行了它该走的分支。**
+
+- `qa_video.py::check_chinese_residue` **单帧 + 低置信度 = OCR 误读，不算残留（2026-09-28 新增）**：
+  这条硬门禁原来只按 `conf >= 0.5` 收集（默认 `min_confidence=0.5`），于是
+  **人脸/头发纹理**和**快速推拉或缩放的英文图形**被误读出的 CJK 也会把整条片子判 FAIL。
+  03 实测：226s 是「奥尼尔抱起科比」的经典照，科比头发处被读成 `可口`，conf **0.6877**、
+  只出现在 **1 帧**；同片 13 组**真**残留全部是 conf **0.95+** 的完整句子。
+  规则（窄口径）：`frame_count == 1 and max_confidence < 0.9` 的组不算残留
+  （新增 `--residue-single-frame-conf`，默认 0.9，设 0 关闭）。
+  **依据**：真烧录字幕至少持续 ~1s ⇒ 1fps 采样必然连续命中 ≥2 帧；误读通常只落在 1 帧上。
+  这条**不削弱任何多帧残留的检出**，也不会放过高置信的单帧误读
+  （用 03 旧数据回测：14 组 → 剔 1 组，保留的 13 组最低 conf 仍是 0.9542）。
+  ⚠️ 纪律：**判"误读"必须先抽帧目视确认**（`ffmpeg -ss <t> -i final.mp4 -frames:v 1`，
+  并把误报 bbox 区域放大），不能凭置信度数字就下结论 —— 这是硬门禁，
+  放宽它的唯一正当理由是"已目视证明画面里确实没有中文"。
+  剔除结果会写进 `qa.json` 的 `misreads_dropped`，并在 `detail` 里列出，
+  便于复核而不是"悄悄消失"。
+
+- 🔴 `generate_cover.py::clean_frame_with_plan` **把全片清理项都擦到封面这一帧上（2026-09-29 新增）**：
+  函数签名原来只吃 `plan_items`，而 `localization-plan.json` 是**整条片子**的计划、
+  封面是**单帧快照** —— 于是 65 个项**全部**在这一帧上执行了一遍，其中包括
+  **此刻根本不在屏上**的区域。
+  * **现象**：03（湖人传奇羁绊）`cover.jpg` 上，**科比脸正中一块 361×191 的纯黑方块**
+    （1080×1920 画布坐标 x 47..408 / y 867..1058）。抽源片同帧（t=236.85s）**画面完全干净**
+    ⇒ 黑块 100% 是封面渲染引入的，不是源片带的。
+  * **真因**：plan 里唯一的非字幕项 `pop_000`（`caption_overlay`，action=remove，
+    0.6–3.4s 的中屏中文关键词弹窗）bbox 是 428×128 → `h>100` ⇒ 命中
+    **「大区域」分支 = 高斯模糊 + `blur_alpha=210` 压暗到 18% 亮度** ⇒ 看着就是黑块。
+    把它的源 bbox 经 `picture_src`（`scale=0.84375 / origin=0 / fy=dst_h/crop_h=1075/608=1.768`）
+    映射到画布：`x=56*0.84375≈47`、`y=422+(298*0.84375)*1.768≈867`、`w≈361`、`h≈191`
+    —— **与实测黑块逐位吻合**，这就是定位的闭环。
+  * **修法**：新增 `plan_items_at(plan_items, frame_time)` 按 `start_time`/`end_time`
+    过滤（无时间字段的项视为常驻，保守保留），`clean_frame_with_plan` 增加 `frame_time`
+    参数并在内部过滤；`generate_cover.py` 传 `selected_frame.timestamp_sec`
+    （`frame_time=None` 退化为旧行为，保持向后兼容）。
+    03 复跑结果：`cleaned regions: 0 of 0 on screen at 236.85s (plan total 65)` ——
+    这一帧本来一个项都不用擦，原先的 65 次全是无中生有。
+  * ✅ **QA 的分母也要跟着改（同一 bug 的另一半）**：`qa_video.py::check_cover` 原来判
+    `cleaned >= len(plan_items)` —— 用**全片项数**当分母，反向"逼着" cover 去擦不存在的区域，
+    而且会把「这帧本来就干净、一个都不用擦」判成失败。现改为读 cover 写入的
+    `render.frame_clean_expected`（=该帧在屏项数），缺失时就地按时间戳过滤。
+  * **判据（下次 1 分钟定位）**：`cover-plan.json` 里
+    `render.frame_cleaned_regions` >> `frame_clean_expected`，或 `frame_clean_at_sec`
+    落在任何 remove/translate 项的 `[start_time, end_time]` 之外 ⇒ 就是这个问题。
+    一条命令可全量自查：遍历 `*/work/cover-plan.json`，按 `selected_frame.timestamp_sec`
+    过滤 plan 项，比对 `frame_cleaned_regions`（本次 4 个已处理封面里只有 03 严重、
+    04 轻度多擦 4 个 ≤100px 小区域，01/02 恰好相等）。
+  * **副作用范围**：`backdrop: blur` 的背景层是**同一张已清理 `img`** 的模糊版，
+    所以擦错区域的痕迹是两处（主画面一块 + 背景一抹），只会更显眼。
+  * **通用教训**：**凡是"用全片级产物去处理单帧/单时刻"的代码，都必须先按时间过滤。**
+    同类风险点：`clean_frame_with_plan`（本次）、任何"拿 plan 去改封面/首帧"的脚本。
+
+- `qa_video.py::check_subtitle` **"幽灵冲突"：不产 sub 的项也参与冲突判定（2026-09-29 新增）**：
+  它按 `timeline.json` 的 entries 逐对比 `final_end > next.final_start`，只排除了
+  `title/watermark/logo/slogan` 四个静态类目。于是 **`remove` 类项**（只做擦除、
+  **没有任何文字**、但仍有源窗口）会把相邻真字幕"顶"出一个冲突：
+  03 报 `timeline conflicts: 1` —— `narr_000`（spoken_subtitle，0.0–2.416）vs
+  `pop_000`（caption_overlay，remove，0.6–0.6），而 `subtitles-en.srt` **实测零重叠**。
+  * **判据**：`timeline_conflicts > 0` 但手算 SRT 无重叠 ⇒ 去 `timeline.json` 找**没有
+    `text_en` 的条目**，它一定是元凶（不是画面问题）。
+  * **修法**：与 `render_subtitles.py` 用同一条判据 —— 该脚本写 SRT 时就是
+    `if not text: continue`。QA 侧加 `if not (e.get("text_en") or "").strip(): continue`。
+    修后 03 复跑：`SRT entries: 64, timeline conflicts: 0, unresolved: 0` → **pass**。
+  * **通用教训**：QA 的分母/集合必须与**真正产出的东西**同名同界
+    （这里：写进 SRT 的条目），拿"计划里的项"去校验"实际产出的行"迟早报幽灵问题。
+    同一天同一个片子因此踩了两次（封面清理、字幕冲突），本质是同一个错。
+
+- 🔴 `render_overlays.py::build_overlays` **屏幕下半部的常驻标题会被静默降级成 3.4 秒的 hook
+  （2026-09-29 新增，05/06 首次命中）**：
+  ```python
+  if cat == "title":
+      if cy < frame_h * 0.35: titles.append(...)   # a..b 全程
+      else:                   hooks.append(...)    # a .. a+hook_seconds(3.4)
+  ```
+  * **后果比"少画一行字"严重得多**：mask **不看 category**，仍按 `start_time/end_time`
+    在整片擦掉中文 ⇒ 底部那条常驻中文被擦掉后，**英文只在头 3.4 秒出现，剩下 470 秒是空白的**。
+    成片看起来"字数不对"，而 QA 六项**全 pass**（它不检查 overlay 覆盖时长）。
+  * **05 的实测形态**：顶部三行 cy=214/269/323（< 0.35×1280=448）落到 `titles` ✓，
+    底部那条评论条 cy=901（>448）会落到 `hooks` ✗。同一份 plan 里 3 条对、1 条错。
+  * **判据**：`plan` 里 `category=title` 且 `end_time - start_time` 接近全片、但
+    `bbox.y + bbox.h/2 > frame_h * 0.35` ⇒ 这条**不会**全程显示。
+    渲染日志里也能看：`overlays: 3 title / 1 hook / 0 sub` —— 全片常驻却出现 hook 计数
+    就是它。
+  * **修法（不写代码就能绕）**：给这条换一个"任何 y 都能全程画"的类目：
+    - 想画**自己的品牌 mark** → `category=watermark`（`a..b` 取项窗口，字号 =
+      `--logo-ratio`×frame_w，正常 0.32）；
+    - 只想**擦掉不补字** → `category=watermark` + `action=remove` + `target_text=null`
+      （render 直接 `continue`，但 mask 照样擦），需要补 mark 时用 `--logo-y` 指定纵向中心。
+  * **通用教训**：**"类目"在渲染器里同时决定"画什么"和"画多久"**，不是纯语义标签。
+    凡是要"全片显示"的项，先回读 `build_overlays` 的分支条件（尤其 `cy` 阈值），
+    别假设 `title` 一律全程。
+  * ⚠️ **同源陷阱（2026-09-29 补充）**：下半屏 title 走 `hooks` 分支后，
+    结束时间是**绝对常量 `hook_seconds`（3.4s）**，不是 `start + 3.4`。
+    ⇒ **`start > 3.4s` 的下半屏 title 连英文都不出**（中文被擦、英文窗口为零长）。
+    07 的 `start` 恰好被 `--pad-head 0.5` 拉到 0，才落在甜点区 `[0, 3.4]` 里侥幸正确。
+    **纪律**：凡 `cy > 0.35·frame_h` 的 title，落笔前先确认 `start ≤ 3.4`，
+    否则必须改类目（见上面的修法）。
+
+- 🔴 `audio_processor.py::_audio_source()` **在 `cleaned.mp4` 没有音轨时回退去 `probe.json` 取源片**
+  （2026-09-29 新增，07 实测日志：`audio source: ..._xWT126.mp4 (from probe.json, has audio track)`）：
+  * 这是**正确行为**，不是 bug —— `render_overlays` 产出的 `cleaned.mp4` 是**纯视频**，
+    音轨从来不由它负责；`keep_original` 策略此时必须回源片拿音轨。
+  * **别做的两件事**：① 不要自己 `ffmpeg -i cleaned.mp4 -i src -map 1:a` 去给它"补音轨"，
+    第 6 步会再混一次，得到双音轨/双声部；② 不要因为 `cleaned.mp4` 探测不到音轨
+    就断定渲染链断了（97% 的情况下这只是正常中间态）。
+  * 前提：`probe.json` 存在且源片路径可达 —— 所以**别删 `probe.json`，也别移动源片**。
+
+- 🔴 **"零改动条目"会让 `localize.py` 在第 3b / 第 5 步硬失败 rc=1**（2026-09-29 新增，08 实测）：
+  * 当 `spec.items = {}` + `keep_unlisted: true`（源片本来就是英文、屏上零中文，无需任何动作）时：
+    - 第 3b 步 `tts_timing.py apply` → `[ERROR] No timing entries to apply`，**rc=1**；
+    - 第 5 步 `render_subtitles.py` → `[ERROR] No entries in timeline`，**rc=1**。
+  * **`localize.py` 没有"零改动快路径"**：第 4 步无论如何都要重编码一遍全片。
+  * **绕法（手工等价收尾，08 已跑通）**：
+    1. 手写一份空 `timeline.json`
+       （`{"status":"ok","strategy":"no_plan_items","entries":[],"total_entries":0, ...}`）
+       —— **在跑 `localize.py` 之前**放好，让 3a/3b 命中 `.pipeline-steps.json` 跳过；
+    2. 预置一个无音轨 `cleaned.mp4`（`ffmpeg -i src -map 0:v -c copy -an`）跳过第 4 步；
+    3. `final.mp4` 用**真·无损重封装**：
+       `ffmpeg -y -v error -i src -map 0 -c copy -movflags +faststart <out>/final.mp4`；
+    4. `subtitles-en.srt` 写**空文件**（`printf '' > ...`）—— QA 的 `check_subtitle`
+       只判 "not found"，**0 条也算 pass**（与 05 一致）。
+  * 08 复验：aac 11830 帧 / h264 16478 帧 / 549.267s 与源片**逐轨一致**，
+    文件只差 117 字节容器元数据 ⇒ 等价于"什么都没动"的完美交付。
+  * **通用教训**：凡"输入为空 ⇒ 无操作"的脚本，要显式支持空输入并 **rc=0 退出**；
+    现在这四处（tts_timing / render_subtitles / 3b / 5）都是"空 = 错误"，批处理会整条中断。
+
 ### 13.4.1 精修渲染：`render_overlays.py`（2026-09-26 新增）
 
 **何时用**：用户反馈"字幕像 AI 加的 / 很花 / 字体难看"，或视频存在**相邻字幕窗口重叠**、
@@ -2046,6 +2340,8 @@ OpenCV 进程 → `uptime` 的 load average 冲到 **230**（5 分钟均值 309�
 | 4 | **误判 05 的 ASR"被中断"** —— 实际是 `grep` 过滤把 `job1.py` 自身排除了，日志看着像断了 | **过滤前先看全**：先 `tail` 完整日志确认状态，再用过滤条件做二次确认；别让一条 grep 决定"要不要重跑 154 分钟" |
 | 5 | `fix05fast.ocr_head` 阈值写成 `cjk >= 1` → 单字 `吧`(conf 0.715) 被当成残留 → **误触发全量重渲** | 判定阈值**直接引用 §1/§12.11 的结论：`cjk >= 2`**，不要在一次性脚本里重新定义阈值；一次性脚本里凡是"要不要重跑大工程"的判据，必须和主流程同源 |
 | 6 | 收尾脚本 `finish.py` 报 `code 2`，真因只是 PATH 缺 `ffmpeg` | 自写脚本 import **之前**铺 PATH（§13.8 条第 3 点），别一看到报错就怀疑逻辑 |
+| 7 | 补跑脚本用 `rmtree` / `os.remove`（relogo.py 撞 safe-delete 配额：目录 >50 项或单文件删除计数 50 → 进程直接 abort，03 跑到一半被杀） | 补跑 / ad-hoc 脚本一律 **rename 不 delete**：`render_parts` → `render_parts_stale`；中间产物留着，靠改名让重渲自然覆盖（见 §14.8 修复脚本注释） |
+| 8 | patch 函数拿源视频路径当拼接输出（splice / patch_03_frame0 把 `video` 当输出目标，险些 `mv` 走源文件） | **所有 patch / 补跑函数只读写 `out/final.mp4`，绝不直接碰源视频**；改完用 `ls -l` 校验源文件 mtime / size 未变 |
 
 > 通用形态：**1、2、5 都是"看起来在省时间，实际最贵"的决定**（并发省的是别人的 CPU、
 > 手敲省的是 3 秒、阈值放宽省的是排队）。凡是要重跑几十分钟的判据，一律按"宁可多验一次"写。
@@ -2077,6 +2373,37 @@ python scripts/measure_text_bbox.py --video in.mp4 --color white --y-min 700 --y
 可用 `--color`：`red` `yellow` `white` `cyan` `magenta`。脚本内部做三重收敛（密度过滤 → 最长连续段 → 分位数裁剪），
 避免红色球衣/球场把 bbox 撑到画面边缘。**若输出 bbox 触边（x=0/y=0），说明仍被背景污染 —— 收窄 `--y-min/--y-max`。**
 
+#### 14.1.1 什么时候**别**用 `measure_text_bbox.py`，改用「色核 + 跨时间」自测（2026-09-29 新增）
+
+两个前提先摆出来：
+
+1. **长片上它可能被杀**。本批 05（473s / 25fps）按 `--step 0.2` 跑，进程直接被 SIGKILL
+   （exit 137，输出全空）。它按时间戳逐点 seek + 解码，点数 = 时长/step。**给长片加 `--step`**
+   （≥1.0）或只截一段窗口。
+2. **它按"颜色"找字，不是按"文本"找字**。当画面里有同色物体（黄色球衣、红色球场）时，
+   收敛规则给出的框会带上背景。反过来，**当你要的框比 OCR 的框更紧时**，色核法才是对的。
+
+**判据（什么时候必须自己量）**：
+- OCR 的 track bbox **触边**（x=0 / y=0）—— 那是 padding 与背景一起被卷进来的信号；
+- OCR 的 bbox **明显宽于肉眼可见文字**（本批 06：OCR 给 w=436/202，实测字只有 332/104 宽）。
+  这不是 OCR 的错：`track_text.py` 的框是**多次检出的聚合**，带 padding，且会吃掉整条横幅的底板。
+
+**自测法（20 行，跨时间取交集比单帧可靠）**：
+```python
+for t in (2, 30, 100, 200, 300, 400, 480):
+    cap.set(cv2.CAP_PROP_POS_FRAMES, int(t*fps)); ok, fr = cap.read()
+    roi = fr[y0:y1, x0:x1]                       # 只在你已知的带内找
+    b, g, r = roi[:,:,0].astype(int), roi[:,:,1].astype(int), roi[:,:,2].astype(int)
+    m = (r>170)&(g>140)&(b<110)                  # 黄字；白字用 (r>185)&(g>185)&(b>185)
+    xs = np.nonzero(m.sum(axis=0)>2)[0]; ys = np.nonzero(m.sum(axis=1)>4)[0]
+```
+- **看 7~8 个时间点的读数是否一致**：一致 ⇒ 这是字；只有个别点跑飞（本批 06 在 494s/502s
+  读到 x>700）⇒ 那是画面里的同色物体，**按多数点取值**。
+- 落在 **实拍画面**上的中文（不是黑边）要在测得范围上**只加描边余量（约 6px）**；
+  落在**黑边**上的中文可以直接吃 OCR 的 padding（反正擦出来还是黑，本批 05 就是这种）。
+- 收完框一定要 `preview_frames.py` 出帧 + 用 `ocr_video.ocr_with_rapidocr` **复扫一遍**再提交渲染：
+  `chinese_residue` 是硬门禁，框收紧了却留了描边残影，要赔一整轮重渲。
+
 ### 14.2 `asr.json` 的 `has_chinese_narration` 不可直接采信
 
 **踩坑**：whisper 被强制 `language=zh` 时，会把**非语音音频**（篮球音效/背景乐/英文采访）幻觉成中文，
@@ -2084,11 +2411,117 @@ python scripts/measure_text_bbox.py --video in.mp4 --color white --y-min 700 --y
 实测复核：auto 语言检测返回 `ko` + 纯乱码（"Muppet"/"gedacht"/"comma"），**该片根本没有人声解说**，是篮球音效 + 英文采访。
 
 **规则**：
-1. 看到 `has_chinese_narration=true` 先查 `segments[].confidence`——**负值 = 幻觉，不可信**。
+1. 看到 `has_chinese_narration=true` 先查 `segments[].confidence`，但**只看「是不是负数」会判错**
+   ⚠️（2026-09-28 修正，见下）。正确读法是看**量级 + 文本连贯性**：
+
+   | `avg_logprob` | 文本 | 判定 |
+   |---|---|---|
+   | **−0.2 ~ −0.5** | 句句连贯 | **真实转写** —— whisper 对真实语音本来就在这个区间 |
+   | −0.5 ~ −0.8 | 连贯但口语重复 | 倾向真实（口头禅/现场噪声拖低） |
+   | **≤ −1.0** | 循环、乱码、不成句 | **幻觉** |
+   | −2.8 / −3.6 / −3.97 | 循环乱码 | **幻觉**（本批 01/02/04 实测值） |
+
+   **反面案例**：本批 03（湖人 OK 组合，245s）170 段全部 `conf = −0.3258`，
+   若按旧判据「负值 = 幻觉」就会把一部**有完整中文解说**的片子误判成无人声，
+   从而丢掉整条英文解说 + 字幕。实际文本连贯（"他模仿着科比的动作／转身虚晃／
+   后撤步左右晃肩／出手后停在空中的右手／可笑着笑着，有人却哭了"）→ **是真实转写**。
+   `detect_asr_hallucination()` 的三条判据在 03 上 **0/3 命中**（−0.30 远高于 −0.70 阈值、
+   重复句 0%、最高同长段仅占 12%）→ 脚本判对了，是**人肉判据**写粗了。
 2. 复核方法：不指定 language 跑一次 auto-detect。返回 `ko`/`de` 等且输出无意义 → 无真实语音。
 3. 只有当**画面上确实有中文字幕**或**确实听到中文人声**时才走静音策略；否则 `keep_original`。
-4. 静音策略的后果必须自检：**静音原轨 + 无 BGM = 接近默片**。用户说"不处理 BGM"≠ 可以没有声音。
+4. ⭐ **`asr.has_chinese_narration` 这个字段本身也不可信**（本批 06 实测 =false 但确有人声）。
+   判「到底有没有人声」最可靠的办法是**抽窗口单独跑 whisper**：
+   有语音的窗口返回内容，纯音乐/噪声窗口返回**空串**。
+   （本批实测：02 三轮窗口全空 = 无人声；06 第 1 轮有内容 = 有人声。比判正负、比读字段都准。）
+5. 静音策略的后果必须自检：**静音原轨 + 无 BGM = 接近默片**。用户说"不处理 BGM"≠ 可以没有声音。
    若必须静音且不加 BGM，需先向用户确认。
+6. ⭐ **判出「幻觉」不等于「ASR 坏了」—— 它同时给出"这条片没有中文旁白"这个结论**
+   （2026-09-28 本批 05/06 实测）。两条片的 `segments[]` 里全是**英文碎片**
+   （05："Matchwell, good rebound" / "they're really letting them play"；
+   06："let's go" / "swordsman" / "we'll get four of that triple hits"）：
+   * 05 `has_chinese_narration=False`、`chinese_ratio=0.0`、`lang=unknown`、avg_logprob −0.35；
+   * 06 avg_logprob **−2.01**、重复句占比 **0.42** → 三条判据命中即判 HALLUCINATION，
+     但它的"幻觉"同样只是"没有中文人声"，原片是**英文原声 + 音乐**。
+   ⇒ 这两条都走 `keep_original`（原声本来就是英文，不要再叠英文 TTS，否则会出现
+   "英文旁白 + 英文原声"双声部）。**别看到 `-2.01 / 重复 0.42` 就以为片子坏了。**
+   顺带提醒：此时**没有任何东西需要翻译**，工作重心从"字幕重写"变成
+   **"常驻中文标题/水印的原位替换"**（05 顶部三行标题块 + 底部横幅、06 顶部标题 +
+   底部「曼巴记忆」水印位，两条都是**全片常驻**，`duration_sec ≈ 全片时长`、
+   `detection_count ≈ 640~830`）。识别常驻覆盖物的快速判据：
+   `text-tracks.json` 里 `duration_sec` 接近全片时长且 `detection_count` 特别高的那几条。
+
+7. 🔴 **反过来也成立：`segments[]` 里的「空档」不等于「屏上没有中文」**（2026-09-28 03 实测，
+   本批最贵的一个返工）。**按 ASR 分段切 cue 会整段丢掉"只有音乐、屏上打字幕卡"的区段**：
+   既不给它生成 mask（中文残留），也不给它翻译（内容缺失）。
+
+   * **现象**：03 首轮成品 QA `chinese_residue = FAIL`，14 组残留集中在
+     **9–13 / 25–29 / 39–45 / 194–197s** 四个区间，每组都是完整、高置信（0.95+）的中文句子
+     （`我有五个冠军 你只有四个` / `你可以把这句话存进银行里` / `（团队）这个单词里面没有i（自我）`
+     / `当镜头捕捉到我们两个…`）。
+   * **排查弯路**：看到 `chinese_residual_ocr_sample: 0`（采样检查）PASS 但全片 1fps 扫描 FAIL，
+     第一反应是"mask 没生效"。实际 `masks-index.json` 与 plan items 严格 1:1、几何也正确 ——
+     **是计划里根本没有那几段**。检查手法：把 `ocr.json` 底部字幕带（y 590–685）的检出按
+     **文本聚合出的时间跨度**铺开，与 `translations.json` 的 cue 窗口对比，缺口一眼可见。
+   * **判据（关键，别再连跑两轮 whisper）**：对缺口的窗口**单独重跑 whisper**，
+     得到的是 `avg_logprob = -5.65 / -3.90` 的乱码（`那我們大概加入這一次` / `這種 Why are you team`）
+     ⇒ 那是「纯音乐段」的幻觉特征，**原 ASR 不输出分段是正确的**，不是漏转。
+     ⇒ 于是结论明确：**没有旁白，但有屏上中文** → 必须补 `translate` 项，不能靠"改 ASR"解决。
+   * **修法**：把这 4 段作为**新 cue** 插进 `translations.json`，窗口取
+     `[上一 cue.end, 下一 cue.start]`，再走 `tts_probe → split_cues → plan_narration →
+     norm_narr → plan_builder` 完整重跑（**`segments[]` 不动**，因为没有旁白可提）。
+   * ⭐ **新增 cue 的英文总长必须 ≤ 它自己的空档**，否则漂移会顺着级联传到后面一大段。
+     第一版把 4 段的意思写全（gap A 9.89s / gap B 8.69s），最大漂移直接冲到 **6.35s**
+     —— 英文比画面滞后 6s，肉眼可见。按级联公式 `place = max(cue.start, prev_end + gap)`
+     **反推阈值**（gap A ≤ 6.33s、gap B ≤ 6.81s，因为前一个 cue 自己已经溢出 1.6s），
+     收紧到 6.34s / 6.17s 后最大漂移降到 **2.16s**、旁白 cue 仅 0.33s。
+     **操作要点：先算出「可用窗口 = 下一 cue.start − max(cue.start, prev_end + gap)」，
+     再照着这个秒数写字，而不是写完了才去量。** 一个 cue 的 TTS 必须 ≤ 其窗口这一点，
+     在级联下是"漂移"而不是"报错" —— 所以脚本的 `win<tts` 校验**不会**替你拦住它。
+   * 取舍原则：缺口的字卡常是**引语**，与旁白可能语义重复（03 的 gap A 与 cue19 都讲
+     "如果当年不那么要强就能多拿几个冠军"）—— **重复的可以砍，砍掉正好换来不漂移**。
+
+8. ⭐⭐ **判定「原声到底是中文还是英文」的决定性手法：抽窗口、强制 `zh` / `en` 各跑一次**
+   （2026-09-29 本批 07 实测，比读 `has_chinese_narration`、比 auto-detect、比肉眼听都准）。
+
+   **为什么需要它**：管线 ASR 走 `whisper_local` 的 base 模型，在**音乐主导的混剪**上必然幻觉；
+   而"英文原声"被强制 `language=zh` 转写时，输出的同样是**看起来像中文的乱码**
+   （07 出的是 `韡蔡柏保` / `奶泥`）—— 光看"有中文输出"会把一条**英文解说片**误判成"有中文旁白"，
+   从而错选 `mute_original_tts_bgm`，把好的英文原声整条静音掉再叠一层机械英文 TTS（双输）。
+
+   **手法**：取一段有代表性的音频窗口（避开片头卡），**同一段**分别强制 `--lang zh` /
+   `--lang en`，比较 whisper 返回的 `no_speech_prob` 与 `avg_logprob` 的**中位数**：
+
+   | 强制语言 | median(`no_speech_prob`) | median(`avg_logprob`) | 输出文本 | 判定 |
+   |---|---|---|---|---|
+   | `zh` | 0.421 | **−4.320** | 乱码（`韡蔡柏保` / `奶泥`） | 强语言假设是错的 |
+   | `en` | **0.056** | **−0.668** | 连贯英文（`And the Bryant!` / `Kobe Bryant on a record time!` / `Charging up a facial on the corner.`） | **真实语言** |
+
+   **读法（两条同时看）**：
+   * `no_speech_prob` 低（≲0.15）= 模型确信"这里有语音"；
+   * `avg_logprob` 落在 **−0.2 ~ −0.7** 且**句子连贯** = 真实转写（见 §14.2 的区间表）；
+   * 换语言后 `avg_logprob` 从 −4.3 跳到 −0.67、文本从乱码变成成句 ⇒ **赢的那个语言就是原声语言**。
+
+   **工具**：`tiktok-batch/audio_probe.py`（本批新建，独立于管线）——
+   ```bash
+   python audio_probe.py <视频或wav> [--start 180] [--dur 120] [--model base] --lang both \
+          --out work/audio-probe.json
+   ```
+   它自己 ffmpeg 裁 16k 单声道 → 逐语言调 whisper → 打印/落盘两张对照表。
+   ⚠️ **坑**：whisper 内部 `whisper/audio.py::load_audio` 用**裸名 `ffmpeg`** 解码，
+   而本机 ffmpeg 只在 `~/.local/bin` 软链 ⇒ 直接调会 `FileNotFoundError: 'ffmpeg'`。
+   脚本里必须显式给子进程铺 PATH（与 `finish.py` 同源坑）：
+   ```python
+   env["PATH"] = os.path.dirname(FFMPEG) + ":/usr/local/bin:/usr/bin:/bin:" \
+                 + os.path.expanduser("~/.local/bin") + ":" + env.get("PATH", "")
+   ```
+
+   **结论的用法**：
+   * 赢 `en` ⇒ 原声是英文 ⇒ `keep_original`，**不叠英文 TTS**（会双声部）、不加 BGM（盖掉解说）；
+     工作重心转为**常驻中文标题/水印的原位替换**（07/09 都是这种）。
+   * 赢 `zh` ⇒ 真·中文旁白 ⇒ 走 `mute_original_tts_bgm` 的完整翻译链路（03 那种）。
+   * 两个都乱 ⇒ 纯音乐/纯音效 ⇒ `keep_original`（或在用户确认下加 BGM），屏上中文仍要处理。
+
+   [`audio_probe.py`]: 依赖 conda 环境 `/Users/jason/opt/miniconda3/bin/python`（带 whisper）。
 
 ### 14.3 清理后必须验证区间**两端**，不能只验中间
 
@@ -2116,6 +2549,176 @@ A 的标题贯穿全片，只在中间抽一帧也会漏判。
 - 用户说"去掉/**删除**" → `action: "remove"`，`target_text: null`，`replacement: null`。**不要在原位补英文**。
 - 只有当用户说"翻译/换成英文"时才用 `translate`。
 - 封面（cover.jpg）已承载标题时，视频画面内**不重复**放同类标题 —— 这是用户的明确偏好。
+
+### 14.6 片尾卡（outro / 频道 CTA 卡）：全片常驻 mask **覆盖不到**，而且是硬门禁杀手
+（2026-09-29 新增，09「2012 全明星赛」首次命中，是本批最容易被漏掉的一类残留）
+
+**现象**：09 渲染 + finish 全绿，但 QA 报 `chinese_residue: FAIL`：
+3 条残留（`体育` / `感谢` / `点赞关注`，conf 均 **0.999+**）**全部落在同一秒 `938.0s`**。
+
+**根因**：源片最后 **1.8 秒**是一张**独立的片尾卡**（黑底 + 源频道徽标 + 粉色按钮 +
+「感谢 点赞 关注」），它**只在结尾出现**，而我们的 mask 是从
+「全片常驻轨迹 + 开场卡」推导出来的 —— **两类都盖不住它**。
+更阴险的是：**这类卡几乎总是"感谢/点赞/关注 + 频道台标"，天然是中文 + 竞品品牌**。
+
+**必检纪律（写进流程，别再靠 QA 兜）**：
+渲染完（或 Job1 结束）后，**单独扫一遍片尾最后 5 秒**：
+```bash
+ffmpeg -y -ss <dur-5> -i <src> -frames:v 1 -q:v 2 tail.jpg   # 目视
+```
+或用近黑像素占比自动定位（片尾卡多是黑底，`<20` 灰阶占比会从 ~0.30 跳到 **0.69 → 0.91**）：
+```python
+g = cv2.cvtColor(fr, cv2.COLOR_BGR2GRAY).astype(np.int16)
+frac = float((g < 20).mean())     # 逐帧打印，跳变点即片尾卡起始帧
+```
+⚠️ **QA 的 1fps 采样救不了你**：采样点是整数秒，**短于 1 秒的片尾卡可能整条漏检**；
+而只要它有一帧落在某整数秒上，就会直接 **FAIL**。
+
+**首选处理 = 整段裁掉**（不要 inpaint）：
+* 理由：① 那是**源频道的"点赞关注"CTA + 台标**，转载留着是双重损失（中文残留 + 竞品品牌）；
+  ② 裁切是**纯流拷贝、零重编码、零 inpaint 伪影**，质量最好、成本最低；
+  ③ 黑底上的白徽标 inpaint 效果虽好，但要重编码 + concat，性价比远不如直接切。
+* 命令（**只切尾**，起点是 0 ⇒ 不受 §5.1-12「中段窗口不能用 copy」的限制）：
+  ```bash
+  ffmpeg -y -v error -i final.mp4 -map 0 -c copy -t <cut_sec> -movflags +faststart out.mp4
+  ```
+* ⚠️ **`-t` + `-c copy` 不是帧精确**：实测 `-t 937.633` 多留 2 帧（把片尾卡的淡入帧带进来了）。
+  **必做步**：裁完用 `ffprobe -select_streams v -show_entries stream=nb_frames` 核对帧数，
+  再 `-sseof -0.1 -frames:v 1` 出**末帧**目视确认没有徽标/中文，不够就**继续往前收**。
+* 🚨 **裁掉时长会让 QA 的 `duration_match`（阈值 0.5s）FAIL** —— 这是**预期行为**，
+  不是要你去掉 QA。正确做法是**显式声明新时长基准**：
+  `qa_video.check_video` 会**优先读 `work/originalize-result.json` 的 `duration_sec`**
+  （源码注释：*"原创化（标题卡/变速/BGM）会改变总时长"*）。
+  该文件常规由 `originalize_video.py` 产出；本次是**有意编辑**，故**手写**并写清 `reason` /
+  `removed_frames` / `method` / `verification`（可审计，不隐藏）。
+* **留档**：把未裁切的 `final.mp4` 改名移到 `work/final-untrimmed-<dur>s.mp4`
+  （与 §4.1 的 04 窗口补丁同口径），便于复算/复渲，不额外占空间。
+
+**通用教训**：**"全片常驻"是假设，不是事实**。任何"只在首尾出现"的元素
+（片头卡、片尾卡、字幕条、LOGO 动画）都逃得过"常驻轨迹"推导，
+必须各自单独检一遍。**片尾尤其危险 —— 它常是 CTA + 台标。**
+
+### 14.7 片头第 0 帧：**采样网格从来不含它**（2026-09-29 修复，比 14.6 更隐蔽）
+
+**现象**：02 / 03 / 09 三条已交付、QA 全部 `chinese_residue: pass` 的成片，
+**第 0 帧（t=0.000）都压着一张中文标题卡**：
+* 02「30队巡礼之国王」+「白巧克力国王生涯高光混剪」（conf 0.93 / 0.99）
+* 03「OK组合」+「一辈子的羁绊」（conf 0.976）
+* 09「2012年 全明星赛」+「NBA全明星赛」（conf 0.995 / 0.917，f=0~1 两帧）
+
+三张卡都是**独立片头卡**，**只存在 1–2 帧**，f=1（或 f=2）就硬切到正片。
+
+**根因（`extract_frames.py`，2026-09-29 已修）**：原来用 `-vf fps=<N>` 抽帧。
+**ffmpeg 的 `fps` filter 的输出帧不含源片第 0 帧** —— 实测 1FPS 的首个输出帧
+落在源片 **t=0.4667**（第 14 帧），且此后每帧都比标注晚约 0.53s；原代码还把时间戳
+写成 `(i+1)/coarse_fps`（1.0, 2.0, 3.0…），于是**采样比画面又晚 0.53s**。
+⇒ **t=0 那一帧永远不在任何采样网格里**，dense pass 最早也只到 t=0.2。
+⇒ `track_text.py` 自然看不到任何"持续性"，`qa_video.py` 的 `chinese_residue`
+用**同一套 `fps=N` 取帧**，所以**它的 pass 是假的** —— 这是 14.6 的镜像问题，
+但 14.6 至少会被 QA 抓到（片尾卡落在整数秒上），**14.7 连 QA 都抓不到**。
+
+**修法**（两处都已改，改完必须自测）：
+```python
+# extract_frames.extract_coarse / extract_dense
+src_fps = probe_src_fps(video)                     # ffprobe r_frame_rate
+period  = max(1, int(round(src_fps / coarse_fps)))
+run(["ffmpeg", "-y", "-i", video,
+     "-vf", f"select='not(mod(n,{period}))'", "-vsync", "0",
+     os.path.join(frames_dir, "c_%05d.png")])
+# 时间戳 = i / coarse_fps  ->  0.0, 1.0, 2.0 …（既覆盖 t=0，又消掉 0.53s 偏移）
+```
+`qa_video.check_chinese_residue` 同样改成 `select='not(mod(n,period))'`
+（它自己新增了 `_probe_fps`）。**自测判据**：改完对源片跑一次 `extract_frames.py`，
+`frames-index.json` 的第一条必须 `timestamp_sec == 0.0`，且把该帧 PNG 丢进 OCR
+**必须**能读出那张中文卡。仅看"代码改对了"不算验证通过。
+
+**必检纪律（交付前自检清单 §12.8 已加）**：抽帧自检必须含 **最后 1 秒 + 片尾前 5 秒
++ 第 0 帧**。第 0 帧尤其要点名 —— 它既不在 1fps 网格里，也**不会**被 `-sseof` 之类
+的"末尾取样"顺手带出来，只能显式取 `-frames:v 1`（第 0 帧）或按帧号 `select`。
+
+**处理方式（首选：整帧替换 + 窗口补丁，别 inpaint）**：
+这种卡是**独立镜头**，与 f=1 起的画面毫无关系，所以可以直接**把 f=0（及 f=1）
+替换成下一镜头的帧**，效果远好于 inpaint：
+* 零 inpaint 伪影（中文区域往往占画面 10–25%，TELEA 会糊一大块）；
+* **帧数不变 ⇒ 时间轴/音轨完全不动**，不用改时长基准（对比 §14.6 裁尾要写
+  `originalize-result.json`）；
+* 实现（本例 03，K = 缺陷窗后第一个关键帧）：
+  ```bash
+  # 替换源 = 下一个镜头的首帧
+  ffmpeg -y -v error -i final.mp4 -vf "select='eq(n\,1)'" -frames:v 1 new_f0.png
+  # 只重编 [0, K)，f=0 用替换源盖住
+  ffmpeg -y -v error -i final.mp4 -i new_f0.png -filter_complex \
+    "[0:v]trim=end_frame=155,setpts=PTS-STARTPTS[base];[base][1:v]overlay=0:0:enable='eq(n,0)'[v]" \
+    -map "[v]" -an -vsync 0 -c:v libx264 -preset veryfast -crf 18 -pix_fmt yuv420p head.mp4
+  # 拼接（尾部流拷贝，逐位相同）
+  python <video-window-patch>/scripts/window_patch.py \
+    --old final.mp4 --head head.mp4 --out patched.mp4 --window-end 0.1
+  # ⚠️ window_patch 的 head/tail 都带 -an ⇒ 输出无声，必须自己合并原音轨：
+  ffmpeg -y -v error -i patched.mp4 -i final.mp4 -map 0:v -map 1:a -c copy \
+    -movflags +faststart final_new.mp4
+  ```
+  ⚠️ **`head` 的编码参数必须与旧渲染一致** —— 旧渲染走 `render_overlays.py`，
+  即 `-c:v libx264 -preset <preset> -crf <crf> -pix_fmt yuv420p`（无其它参数）。
+  否则 concat `-c copy` 可能因 SPS/PPS 不匹配而花屏。
+* 若走 inpaint：`action=remove` + `target_text=null` + `category=title`
+  （`build_overlays` 见到空 `target_text` 直接 `continue`，只由 `generate_masks`
+  出清理框），窗口取 `[0, 0.033]`，并且**必须 `--pad-head 0 --pad-tail 0`** ——
+  否则默认 pad 会把窗口撑到 0.4s，在 f=1..12 的真实镜头上留下一片无谓的 inpaint 痕迹。
+
+**通用教训（与 14.6 合起来记）**：**"全片常驻"和"采样网格"都是假设**。
+任何"只在极短时间出现"的元素（片头第 0 帧、片尾 1.8s、闪现 LOGO）都逃得过
+轨迹推导；而**采样网格的边界本身也是漏检源** —— 首帧、末帧都要显式点名。
+
+### 14.8 TTS 混音：多路 `amix` 不加 `normalize=0` 会把人声压死（2026-09-29，03 实锤）
+
+**现象**：用户反馈"成片只有背景音乐，没有英文解说"。但 `tts_track.wav` 里
+64 条 cue 全部在场、时间也对 —— 语音被整体压低了 **36dB**（20·log₁₀(64)）。
+
+**根因**（`audio_processor.py` 拼 TTS 轨处）：
+
+```
+amix=inputs=64:duration=longest          # ✗ 默认 normalize=1：每路 ÷64
+amix=inputs=64:duration=longest:normalize=0   # ✓ TTS cue 互不重叠，unity 相加才对
+```
+
+amix 默认把**每一路输入除以输入总数**。cue 数一多（本例 64），每条 TTS 被
+÷64 ≈ -36dB；后面 loudnorm 只能救整体响度、救不了人声/音乐**相对比例**，
+最终人声埋在 BGM 底下 ~20dB —— 人耳就是"只有音乐"。
+（2 路的 TTS+BGM amix 同理是每路 ÷2，但两路同比缩放不破坏相对平衡，
+loudnorm 可补偿；**真正致命的是多路 TTS amix**。）
+
+**实测证据链**（ Whisper 抽查 + volumedetect）：
+- `tts_track.wav` 前 25s：mean **-57dB** / max **-36dB** —— 正好 = 1/64；
+- 成片头部拉高 30dB 后 Whisper 立刻听写出完整 TTS 内容；
+- 时间轴上 cue 全程覆盖（0–218s 无 >12s 空窗），但成片只有 BGM 较弱段落
+  隐约"漏出"一点人声 —— **这是"QA 六项 pass 但用户听不到解说"的盲区：
+  音频 QA 查响度/静音，不查"人声相对音乐的比例"**。
+
+**修复与验证**（不需要重渲视频，只换音轨）：
+
+```bash
+# 1) 恢复电平（amix ÷64 的逆操作）
+ffmpeg -i work/tts_track.wav -af volume=36.1241dB work/tts_track_fixed.wav
+# 2) 与已有 bgm_track.wav 归一化相加 + loudnorm
+ffmpeg -i work/tts_track_fixed.wav -i work/bgm_track.wav -filter_complex \
+  "[0:a][1:a]amix=inputs=2:duration=longest:normalize=0[l];[l]loudnorm=I=-16:TP=-1.5:LRA=11[o]" \
+  -map "[o]" work/mixed_fixed.wav
+# 3) 视频流 copy，只换音轨（rename 换名，不要 rmtree）
+ffmpeg -i final.mp4 -i work/mixed_fixed.wav -map 0:v -map 1:a \
+  -c:v copy -c:a aac -b:a 192k -movflags +faststart final_new.mp4
+```
+
+**验收**：Whisper 听写修复后头部 25s 应完整还原 cue 文本；volumedetect 头部
+mean 电平应从 -57 回到 ≈-17dB。
+
+**纪律**：**交付 TTS 类成片前，必须 Whisper 抽听成片本身（不是 tts_track）**，
+确认解说在头部/中部/尾部都能听写出来；`tts_track.wav` 有声音 ≠ 成片有声音。
+
+**自动闸门（2026-09-29 落地）**：`qa_video.py` 的 `check_audio` 已对 `work/tts_track.wav`
+跑 `volumedetect`，**峰值 < -25dB 即 WARNING**（正常 TTS 峰值约 -3~-6dB；amix 漏 normalize=0
+会让峰值按 1/线索数 缩放，64 条 cue → ÷64 ≈ -36dB，直接对应本例）。
+`audio_processor.py:490` 的 `normalize=0` 修复确保新渲染不再触发；若仍 WARN，说明重渲前
+漏了修复或 tts_track 被旧流程产出，需按上面"验收"步骤手动 audiofix。
 
 ---
 

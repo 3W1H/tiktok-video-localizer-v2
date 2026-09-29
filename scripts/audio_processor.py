@@ -52,6 +52,7 @@ TTS 完全不可用时：静音原轨 + 无配音 + 英文字幕 + BGM → WARNI
 import argparse
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from typing import List, Dict, Any, Optional
@@ -336,6 +337,24 @@ def build_bgm_track(work_dir: str, bgm_asset: str, duration: float,
     return bgm_track
 
 
+def _has_audio_stream(path: str) -> bool:
+    """该文件里到底有没有音轨。
+
+    为什么需要：`keep_original` 的原声要从**源片**取，而标准 Job2 链路里传进来的
+    `video_path` 是 `render_overlays.py` 产出的 `work/cleaned.mp4` —— 渲染时写了
+    `-an`，**它没有音轨**。直接对它 `-vn -acodec pcm_s16le` 会得到
+    "Output file #0 does not contain any stream"（2026-09-29 05 实测）。
+    """
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a",
+             "-show_entries", "stream=index", "-of", "csv=p=0", path],
+            capture_output=True, text=True, timeout=60).stdout.strip()
+        return bool(out)
+    except Exception:
+        return False
+
+
 def run_mix(video_path: str, work_dir: str, output_dir: str,
             audio_plan_path: str, timeline_path: str) -> Dict:
     """按 audio-plan.json 混音"""
@@ -347,6 +366,21 @@ def run_mix(video_path: str, work_dir: str, output_dir: str,
     strategy = audio_plan.get("strategy", "keep_original")
     probe = load_json(work_path(work_dir, "probe.json"), {})
     duration = probe.get("duration_sec", 0)
+
+    # ⚠️ 「原声」必须从**源片**取：标准 Job2 链路传进来的 video_path 是
+    # render_overlays 产出的 work/cleaned.mp4（渲染时 `-an`，**没有音轨**）。
+    # 对它 `-vn -acodec pcm_s16le` 会得到 "Output file #0 does not contain any stream"
+    # （2026-09-29 05 二十佳球实测，整条链路在最后一步 rc=1）。
+    # 需要原声的策略（keep_original / duck_original_add_bgm）统一走这个解析。
+    def _audio_source() -> str:
+        src = (probe or {}).get("path") or (probe or {}).get("source_path") or ""
+        if src and os.path.exists(src) and _has_audio_stream(src):
+            log.info("audio source: %s (from probe.json, has audio track)",
+                     os.path.basename(src))
+            return src
+        return video_path
+
+    audio_src = _audio_source()
 
     mixed_audio = work_path(work_dir, "mixed_audio.wav")
     warnings = []
@@ -370,10 +404,17 @@ def run_mix(video_path: str, work_dir: str, output_dir: str,
         shutil.copyfile(normalized, path)
 
     if strategy == "keep_original":
-        # 保留原声
-        log.info("Strategy: keep_original - preserving original audio")
+        # 保留原声（来源见上面 _audio_source 的说明）
+        if not _has_audio_stream(audio_src):
+            # 两边都没有音轨 -> 明确报错，别静默出一个没有声音的成品
+            raise RuntimeError(
+                f"keep_original: no audio stream in {audio_src} "
+                f"(rendered video={video_path}, source="
+                f"{(probe or {}).get('path') or 'unknown'})")
+        log.info("Strategy: keep_original - preserving original audio "
+                 "(from %s)", os.path.basename(audio_src))
         run([
-            "ffmpeg", "-y", "-i", video_path,
+            "ffmpeg", "-y", "-i", audio_src,
             "-vn", "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2",
             mixed_audio,
         ])
@@ -441,8 +482,12 @@ def run_mix(video_path: str, work_dir: str, output_dir: str,
 
         if inputs:
             # 混合所有 TTS
+            # ⚠️ 必须 normalize=0：amix 默认把每路输入除以输入数，64 条 cue 就是 -36dB，
+            # 整条 TTS 轨会被压到 BGM 底下 20dB，成片听起来"只有 BGM 没有解说"
+            # （2026-09-29 在 03 湖人 OK 上实锤：tts_track mean -57dB / max -36dB = 1/64）。
+            # TTS cue 互不重叠，unity gain 相加是正确语义。
             mix_inputs = "".join(f"[a{i}]" for i in range(n_inputs))
-            filter_str = ";".join(filter_parts) + f";{mix_inputs}amix=inputs={n_inputs}:duration=longest[tts_out]"
+            filter_str = ";".join(filter_parts) + f";{mix_inputs}amix=inputs={n_inputs}:duration=longest:normalize=0[tts_out]"
             run([
                 "ffmpeg", "-y", *inputs,
                 "-filter_complex", filter_str,
@@ -505,7 +550,7 @@ def run_mix(video_path: str, work_dir: str, output_dir: str,
 
         orig_track = work_path(work_dir, "orig_ducked.wav")
         run([
-            "ffmpeg", "-y", "-i", video_path,
+            "ffmpeg", "-y", "-i", audio_src,
             "-vn", "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2",
             "-af", f"volume={duck_db}dB",
             "-t", str(duration),

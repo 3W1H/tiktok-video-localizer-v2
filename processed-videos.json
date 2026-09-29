@@ -128,6 +128,160 @@
         "subtitles-en.srt",
         "tiktok-post.md"
       ]
+    },
+    {
+      "source_file": "篮球历史上最全能的大前锋 攻防一体#加内特_xWT157.mp4",
+      "source_path": "/Users/jason/Downloads/篮球历史上最全能的大前锋 攻防一体#加内特_xWT157.mp4",
+      "file_size": 5697811,
+      "mtime": 1790602805,
+      "processed_at": "2026-09-29T01:30:04+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/篮球历史上最全能的大前锋_攻防一体_加内特_xWT157",
+      "profile": "nba",
+      "status": "WARNING",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "【30天30队之国王：“白巧克力”国王高光表现】让传球变成一种艺术！1998年选秀大会， 贾森·威廉姆斯以首轮第7顺位被国王队选中。彼时在阿德尔曼教练的体系之下，他开始.mp4",
+      "source_path": "/Users/jason/Downloads/【30天30队之国王：“白巧克力”国王高光表现】让传球变成一种艺术！1998年选秀大会， 贾森·威廉姆斯以首轮第7顺位被国王队选中。彼时在阿德尔曼教练的体系之下，他开始.mp4",
+      "file_size": 15241479,
+      "mtime": 1790602703,
+      "processed_at": "2026-09-29T01:30:04+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/30天30队之国王_白巧克力_国王高光表现_让传球变成一种艺",
+      "profile": "nba",
+      "status": "PASS",
+      "patched_at": "2026-09-29T08:03:00+08:00",
+      "patch_note": "jason 复看发现两处：① 品牌 logo 被手填 --logo-y 380 顶到画面上部（29.7%）；② 第 0 帧压着源片中文片头卡（30队巡礼之国王/白巧克力国王生涯高光混剪）。修法：plan 补 A3 remove item，去掉 --logo-y 走管线兜底 0.66*1280=844.8，--pad-head 0 --pad-tail 0 后全量重渲。封面 logo 未动（jason 要求）。根因见 README-STATUS.md §5.8。",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "以“死亡五小”掀起小球革命、用极致空间与团队传切重塑现代篮球格局的划时代王朝奠基者#勇士_xWT126.mp4",
+      "source_path": "/Users/jason/Downloads/以“死亡五小”掀起小球革命、用极致空间与团队传切重塑现代篮球格局的划时代王朝奠基者#勇士_xWT126.mp4",
+      "file_size": 46921321,
+      "mtime": 1790602772,
+      "processed_at": "2026-09-29T01:30:04+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/以_死亡五小_掀起小球革命_用极致空间与团队传切重塑现代篮球",
+      "profile": "nba",
+      "status": "WARNING",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "湖人传奇羁绊-OK组合。#NBA#篮球解说#詹姆斯#科比#奥尼尔#NBA盘点#篮球人物_xWT128.mp4",
+      "source_path": "/Users/jason/Downloads/湖人传奇羁绊-OK组合。#NBA#篮球解说#詹姆斯#科比#奥尼尔#NBA盘点#篮球人物_xWT128.mp4",
+      "file_size": 8855200,
+      "mtime": 1790602741,
+      "processed_at": "2026-09-29T01:30:04+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/湖人传奇羁绊_OK组合_NBA_篮球解说_詹姆斯_科比_奥尼",
+      "profile": "nba",
+      "status": "WARNING",
+      "patched_at": "2026-09-29T07:55:44+08:00",
+      "patch_note": "第 0 帧中文片头卡（OK组合/一辈子的羁绊）残留：采样盲区（-vf fps=N 不含源片第 0 帧）。修法：整帧替换 + 窗口补丁（f=0 换成 f=1，重编 [0,155)，接缝 SHA256 IDENTICAL），帧数/音轨逐项不变，未重渲。原片留档 work/final-with-cjk-prefix.mp4。脚本已根治（extract_frames.py / qa_video.py 改 select='not(mod(n,period))'）。",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ],
+      "audio_fixed_at": "2026-09-29T13:20+08:00",
+      "audio_note": "amix normalize bug：64 条 TTS 被压低 36dB（成片只剩 BGM）。已修 audio_processor.py（normalize=0）+ 只换音轨恢复解说（tts_track +36.12dB 重混 loudnorm）。原片留档 work/final-before-audiofix.mp4。logo 亦已重渲归位 475.2。"
+    },
+    {
+      "source_file": "官方制作21世纪10年代20佳球，每一球都是名场面#詹姆斯#库里#nba季后赛#湖人#勇士_xWT128.mp4",
+      "source_path": "/Users/jason/Downloads/官方制作21世纪10年代20佳球，每一球都是名场面#詹姆斯#库里#nba季后赛#湖人#勇士_xWT128.mp4",
+      "file_size": 26068121,
+      "mtime": 1790602755,
+      "processed_at": "2026-09-29T03:08:36+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/官方制作21世纪10年代20佳球_每一球都是名场面_詹姆斯",
+      "profile": "nba",
+      "status": "WARNING",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "十年，恍如昨日。一声“Mamba Out”，带走了一个时代，却留下了不朽的传奇。#科比 ＃科比60分退役战10周年_xWT126.mp4",
+      "source_path": "/Users/jason/Downloads/十年，恍如昨日。一声“Mamba Out”，带走了一个时代，却留下了不朽的传奇。#科比 ＃科比60分退役战10周年_xWT126.mp4",
+      "file_size": 59479460,
+      "mtime": 1790602726,
+      "processed_at": "2026-09-29T03:08:49+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/十年_恍如昨日_一声_Mamba_Out_带走了一个时代_却",
+      "profile": "nba",
+      "status": "WARNING",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "A nine-minute cut of Ja Morant at his most explosive - the drives, the finishes and the show-off handles that made his athleticism the story of his early career. Part 1 of the Morant tape. #NBA #JaMorant #Basketball #NBAClassics #Highlights.mp4",
+      "source_path": "/Users/jason/Downloads/A nine-minute cut of Ja Morant at his most explosive - the drives, the finishes and the show-off handles that made his athleticism the story of his early career. Part 1 of the Morant tape. #NBA #JaMorant #Basketball #NBAClassics #Highlights.mp4",
+      "file_size": 83938247,
+      "mtime": 1790601882,
+      "processed_at": "2026-09-29T04:53:26+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/A_nine_minute_cut_of_Ja_Morant",
+      "profile": "nba",
+      "status": "WARNING",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "【扣篮特辑：科比生涯40大扣篮】从小飞侠到黑曼巴，科比·布莱恩特哪些经典扣篮让你至今记忆犹新？来科比40大扣篮混剪视频中寻找你的答案吧！_xWT126.mp4",
+      "source_path": "/Users/jason/Downloads/【扣篮特辑：科比生涯40大扣篮】从小飞侠到黑曼巴，科比·布莱恩特哪些经典扣篮让你至今记忆犹新？来科比40大扣篮混剪视频中寻找你的答案吧！_xWT126.mp4",
+      "file_size": 60209297,
+      "mtime": 1790602792,
+      "processed_at": "2026-09-29T05:00:30+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/扣篮特辑_科比生涯40大扣篮_从小飞侠到黑曼巴_科比_布莱恩",
+      "profile": "nba",
+      "status": "WARNING",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "《经典》2012年NBA全明星赛，群星闪耀：科比，杜兰特，保罗，格里芬，韦德，罗斯，安东尼，霍华德，拜纳姆，詹姆斯，威斯布鲁克，纳什，诺维茨基，帕克，乐福，马克加.mp4",
+      "source_path": "/Users/jason/Downloads/《经典》2012年NBA全明星赛，群星闪耀：科比，杜兰特，保罗，格里芬，韦德，罗斯，安东尼，霍华德，拜纳姆，詹姆斯，威斯布鲁克，纳什，诺维茨基，帕克，乐福，马克加.mp4",
+      "file_size": 117766853,
+      "mtime": 1790602684,
+      "processed_at": "2026-09-29T06:17:52+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/经典_2012年NBA全明星赛_群星闪耀_科比_杜兰特_保罗",
+      "profile": "nba",
+      "status": "WARNING",
+      "patched_at": "2026-09-29T07:56:02+08:00",
+      "patch_note": "第 0~1 帧中文片头卡（2012年 全明星赛/NBA全明星赛）残留：采样盲区；且 spec 里同名项 bbox_override 遮错位置（计划 y=712/136，实测中文 y=755~856/984~1063）+ plan 窗口 [0.8,3.0] 不含 f=0。修法：整帧替换 + 窗口补丁（f=0,1 换成 f=2，重编 [0,250)，接缝 SHA256 IDENTICAL），帧数与 aac 帧数逐项不变。另片尾 CTA 卡裁切见 README-STATUS.md §4.1。",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ],
+      "audio_fixed_at": "2026-09-29T13:25+08:00",
+      "audio_note": "开头 0-4.4s 中文旁白（2012年NBA全明星赛的精彩呈现）在 keep_original 判定时漏判。已静音 0-4.1s + 4.1-4.45s 淡入，只换音轨。210s 处中文为源 ASR 误报（实为英文解说），未处理。"
     }
   ]
 }

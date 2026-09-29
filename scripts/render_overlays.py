@@ -430,6 +430,11 @@ def main():
                     help="skip source before this timestamp (sampling)")
     ap.add_argument("--max-frames", type=int, default=0,
                     help="stop after N written frames (sampling)")
+    ap.add_argument("--ffmpeg-log", default=os.environ.get("LOCALIZER_FFMPEG_LOG", ""),
+                    help="write each ffmpeg child's stderr to <path>.main / <path>.base "
+                         "instead of /dev/null. Without this a dead pipe surfaces only as "
+                         "'BrokenPipeError' and ffmpeg's actual error is thrown away "
+                         "(2026-09-28: cost two debugging rounds on 03).")
     ap.add_argument("--x264-threads", type=int, default=0,
                     help="libx264 thread count; 0 = auto (all cores). Set a "
                          "small number when running several slices in parallel, "
@@ -493,6 +498,13 @@ def main():
 
     threads = ["-threads", str(args.x264_threads)] if args.x264_threads else []
 
+    def ff_err(tag):
+        """ffmpeg child stderr -> file when --ffmpeg-log is set, else /dev/null."""
+        if not args.ffmpeg_log:
+            return subprocess.DEVNULL
+        os.makedirs(os.path.dirname(os.path.abspath(args.ffmpeg_log)), exist_ok=True)
+        return open(f"{args.ffmpeg_log}.{tag}", "wb")
+
     cmd = [FFMPEG, "-y", "-f", "rawvideo", "-pix_fmt", "bgr24",
            "-s", f"{frame_w}x{frame_h}", "-r", str(fps), "-i", "-",
            "-an", "-c:v", "libx264", "-preset", args.preset,
@@ -500,7 +512,7 @@ def main():
     cmd += probe_color_args(args.video)
     cmd.append(args.output)
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL)
+                            stderr=ff_err("main"))
 
     # Optional second sink: the inpainted-but-unlettered frames. Skipped when
     # inpainting is off (the source is already clean, so a copy adds nothing).
@@ -514,7 +526,17 @@ def main():
         bcmd.append(args.save_clean_base)
         base_proc = subprocess.Popen(bcmd, stdin=subprocess.PIPE,
                                      stdout=subprocess.DEVNULL,
-                                     stderr=subprocess.DEVNULL)
+                                     stderr=ff_err("base"))
+
+    def alive(p, tag):
+        """Turn a dead ffmpeg child into an actionable error, not a bare BrokenPipe."""
+        if p.poll() is not None:
+            hint = (f" (ffmpeg stderr: {args.ffmpeg_log}.{tag})"
+                    if args.ffmpeg_log else
+                    " (rerun with --ffmpeg-log /tmp/ff.log to see ffmpeg's error)")
+            raise RuntimeError(
+                f"{tag} ffmpeg exited early rc={p.returncode} before frame "
+                f"{written} of segment; output={args.output}{hint}")
 
     idx = 0
     written = 0
@@ -544,6 +566,7 @@ def main():
 
         # snapshot the clean frame BEFORE drawing on top of it
         if base_proc is not None:
+            alive(base_proc, "clean-base")
             base_proc.stdin.write(frame.tobytes())
 
         active = [d for d in ov["draws"] if d["a"] <= t < d["b"]]
@@ -557,6 +580,7 @@ def main():
             img = Image.alpha_composite(img.convert("RGBA"), layer).convert("RGB")
             frame = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
 
+        alive(proc, "main")
         proc.stdin.write(frame.tobytes())
         written += 1
         if written % 500 == 0:

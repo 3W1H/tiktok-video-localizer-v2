@@ -40,6 +40,7 @@ fast 路径下 Logo 用 FFmpeg overlay 单 pass 完成（同 contain 逻辑）�
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -68,14 +69,29 @@ DEFAULT_FONT_CANDIDATES = [
 # 实测：720x1280 下即使给到 8 Mbps，高频细节仍比源 HEVC(0.55 Mbps) 少约 25%，
 # 且 macOS/QuickTime 兼容性差，画面容易呈现块状糊斑（用户会描述为"花"）。
 # 统一改用 libx264，码率/质量比好得多，体积还能降到 1/2。
+#
+# 注意：这是 **传输特性(color_transfer, TRC)** 的名称映射，仅适用于 -color_trc。
+# ffprobe 把 TRC 报成 "bt470bg"（按矩阵名报），而 ffmpeg 的 AVColorTransferCharacteristic
+# 里没有这个名字，对应值是 "gamma28"，所以要换名。
+# 千万别把这张表套到 -colorspace / -color_primaries 上：那会把矩阵名改写成 TRC 名，
+# ffmpeg 直接拒绝（"Error setting option colorspace to value gamma28"），编码器初始化
+# 失败、ffmpeg 秒退，上游只看到 BrokenPipeError。
+# 2026-09-28：03（color_space=bt470bg）因此整段渲染挂掉两次，而 02（bt709 三连）
+# 永不命中该键、一路正常 —— 排查了整整两轮才定位。
 _TRC_ALIAS = {"bt470bg": "gamma28"}
+
+# ffprobe 解析：本文件以裸名调用，依赖 PATH。若 PATH 里没有（例如从精简 shell 起，
+# 或 ~/.local/bin 未入 PATH），旧代码会静默 return []，输出流的色彩标记就悄悄丢了。
+# 这里按仓库其它脚本的惯例做 which + 常见兜底，避免"静默改变行为"。
+def _ffprobe_bin() -> str:
+    return shutil.which("ffprobe") or os.path.expanduser("~/.local/bin/ffprobe")
 
 
 def probe_color_args(src_path: str) -> List[str]:
     """沿用源的色彩标记，避免重编码后播放器按错误矩阵解读颜色。"""
     try:
         out = subprocess.run(
-            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+            [_ffprobe_bin(), "-v", "error", "-select_streams", "v:0",
              "-show_entries", "stream=color_space,color_primaries,color_transfer",
              "-of", "csv=p=0", src_path],
             capture_output=True, text=True, timeout=20,
@@ -87,7 +103,9 @@ def probe_color_args(src_path: str) -> List[str]:
     for flag, val in zip(("-colorspace", "-color_primaries", "-color_trc"), out):
         val = (val or "").strip()
         if val and val != "unknown":
-            args += [flag, _TRC_ALIAS.get(val, val)]
+            if flag == "-color_trc":
+                val = _TRC_ALIAS.get(val, val)
+            args += [flag, val]
     return args
 
 

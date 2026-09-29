@@ -6,7 +6,7 @@ qa_video.py - 质量检查
   1. video:    无黑帧/花屏，时长一致
   2. subtitle: SRT 条目数、时间轴冲突
   3. cover:    人脸/主体未被遮挡
-  4. audio:    响度正常，无中文残留（有中文旁白策略时）
+  4. audio:    TTS 轨电平正常（无 amix normalize bug）、片头非静音；中文残留仍需人工 Whisper 抽听（见 §14.8）
   5. localization: 残留中文 OCR 抽检、水印区复检、replace 后 Logo 可见性、review 项汇总
   6. chinese_residue: 【硬门禁】对 final.mp4 全片 OCR 扫描，检出中文即 FAIL
 
@@ -119,6 +119,11 @@ def check_subtitle(output_dir: str, work_dir: str) -> Dict:
     # NOTE (2026-09-26): static overlays (title/watermark/slogan) span the whole
     # video, so their 0-230s windows always "overlap" every real subtitle. They are
     # not subtitle cues and must be excluded, otherwise QA reports phantom conflicts.
+    # NOTE (2026-09-29): 同理，**不写进 SRT 的条目也不能参与冲突判定** ——
+    # `remove` 类项（如 03 的 0.6-3.6s 中屏中文弹窗 pop_000）只做擦除、没有任何
+    # 文字，却仍占着源窗口，于是被报成 "narr_000(0.0-2.416) vs pop_000(0.6-0.6)
+    # 冲突 1 处"，而 subtitles-en.srt 实测**零重叠**。判据与 render_subtitles.py
+    # 完全一致：没有 `text_en` 就不产 cue（该脚本就是 `if not text: continue`）。
     plan = load_json(work_path(work_dir, "localization-plan.json"), {})
     items = plan.get("items", [])
     static_cats = ("title", "watermark", "logo", "slogan")
@@ -128,6 +133,8 @@ def check_subtitle(output_dir: str, work_dir: str) -> Dict:
         if items and idx is not None and idx < len(items):
             if items[idx].get("category") in static_cats:
                 continue
+        if not (e.get("text_en") or "").strip():
+            continue  # draws no subtitle -> cannot conflict with one
         entries.append(e)
 
     timeline_conflicts = 0
@@ -176,8 +183,22 @@ def ocr_cover_chinese(cover_path: str) -> List[str]:
         return []
 
 
+def _probe_fps(video: str, fallback: float = 30.0) -> float:
+    """源片帧率，用于把 "N FPS 采样" 换算成帧步长。"""
+    r = run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=r_frame_rate",
+             "-of", "default=noprint_wrappers=1:nokey=1", video], check=False)
+    try:
+        num, _, den = (r.stdout or "").strip().partition("/")
+        v = float(num) / float(den or 1)
+        return v if v > 0 else fallback
+    except Exception:
+        return fallback
+
+
 def check_chinese_residue(output_dir: str, work_dir: str,
-                          fps: float = 1.0, min_confidence: float = 0.5) -> Dict:
+                          fps: float = 1.0, min_confidence: float = 0.5,
+                          single_frame_min_confidence: float = 0.9) -> Dict:
     """【硬门禁】对成品 final.mp4 全片 OCR 扫描，检出中文即 FAIL。
 
     为什么必须独立跑一遍成品：
@@ -194,6 +215,16 @@ def check_chinese_residue(output_dir: str, work_dir: str,
 
     fps 说明：默认 1fps 对持续 ≥1s 的字幕足够；极短闪现（<1s）可能漏，
     可用 --residue-fps 2 提高采样率。
+
+    ⭐ 单帧检出 + 低置信度 = 不算残留（2026-09-28 新增，窄口径）：
+      真实的**烧录**字幕至少持续 ~1s，1fps 采样必然连续命中 ≥2 帧；
+      而**人脸/头发纹理、快速推拉或缩放的英文图形**会被 OCR 瞬间误读成 CJK，
+      典型特征是「只出现在 1 帧」且「置信度明显偏低」。
+      03 实测：226s 的「奥尼尔抱起科比」经典照上，科比头发处被读成「可口」，
+      conf 0.6877、仅 1 帧 —— 而该片 13 组**真**残留全部是 conf 0.95+ 的完整句子。
+      ⇒ 规则：`frame_count == 1 and max_confidence < single_frame_min_confidence` 的组不算残留。
+      **这条不会削弱任何多帧残留的检出**（真字幕必然多帧），也不会放过高置信的单帧误读。
+      验证误报时**必须先抽帧目视确认**，不能凭置信度数字就下结论。
     """
     final_path = os.path.join(output_dir, "final.mp4")
     if not os.path.exists(final_path):
@@ -221,8 +252,16 @@ def check_chinese_residue(output_dir: str, work_dir: str,
     frame_dir = tempfile.mkdtemp(prefix="ttl-qa-residue-")
     log.info(f"  残留帧抽帧目录: {frame_dir}")
 
+    # ⚠️ 取帧必须从源片第 0 帧开始，**不能用 `-vf fps=N`**：
+    # fps filter 的输出帧不含第 0 帧（实测 1FPS 首帧落在 t=0.4667，
+    # 且整条时间轴比标注晚约 0.53s）。02/03/09 的中文标题卡只存在于第 0 帧，
+    # 用 fps=N 时本项硬门禁会给出**假的 pass**。2026-09-29 修复。
+    src_fps = _probe_fps(final_path)
+    period = max(1, int(round(src_fps / fps)))
+    log.info(f"  残留扫描取帧：src {src_fps:g}fps，每 {period} 帧取 1（含第 0 帧）")
+
     run(["ffmpeg", "-y", "-v", "error", "-i", final_path,
-         "-vf", f"fps={fps}", "-q:v", "3",
+         "-vf", f"select='not(mod(n,{period}))'", "-vsync", "0", "-q:v", "3",
          os.path.join(frame_dir, "f%05d.jpg")], check=False)
 
     frames = sorted(glob.glob(os.path.join(frame_dir, "f*.jpg")))
@@ -262,12 +301,30 @@ def check_chinese_residue(output_dir: str, work_dir: str,
         })
     groups.sort(key=lambda g: g["first_sec"])
 
+    # 单帧 + 低置信度 = OCR 误读，不是烧录字幕。见函数 docstring。
+    # 真字幕至少持续 ~1s -> 1fps 采样必连续命中；误读通常只落在 1 帧上。
+    misreads = [g for g in groups
+                if g["frame_count"] == 1
+                and (g["max_confidence"] or 0) < single_frame_min_confidence]
+    if misreads:
+        keep = {g["text"] for g in groups if g not in misreads}
+        residues = [r for r in residues if r["text"] in keep]
+        groups = [g for g in groups if g not in misreads]
+        log.info(f"  剔除 {len(misreads)} 组单帧低置信度误读 "
+                 f"(<{single_frame_min_confidence}): "
+                 + ", ".join(f"{g['text']!r}@{g['first_sec']}s conf={g['max_confidence']:.2f}"
+                             for g in misreads))
+
     status = "fail" if residues else "pass"
     if status == "fail":
         detail = (f"成品检出 {len(residues)} 条中文残留，涉及 {len(groups)} 处不同文本"
                   f" —— 禁止交付，处理后必须重跑本检查")
     else:
         detail = f"成品全片 OCR（{len(frames)} 帧 @ {fps}fps）未检出中文"
+        if misreads:
+            detail += (f"（已剔除 {len(misreads)} 组单帧低置信度误读："
+                       + ", ".join(f"{g['text']!r}@{g['first_sec']}s conf={g['max_confidence']:.2f}"
+                                   for g in misreads) + "）")
 
     return {
         "status": status,
@@ -276,6 +333,8 @@ def check_chinese_residue(output_dir: str, work_dir: str,
         "frames_scanned": len(frames),
         "residues": residues,
         "groups": groups,
+        "misreads_dropped": misreads,
+        "single_frame_min_confidence": single_frame_min_confidence,
         "detail": detail,
     }
 
@@ -346,15 +405,34 @@ def check_cover(output_dir: str, work_dir: str) -> Dict:
         if not brand_ok:
             log.warning(f"Cover brand_text '{brand_text}' configured but not rendered")
 
-    # 封面帧清理校验（plan 有 remove/translate 项时，封面必须已清理）
+    # 封面帧清理校验（只看**该帧上真的在屏**的那些项，不是全片所有项）
+    #
+    # 2026-09-29：原先用 `cleaned >= len(plan_items)` —— 要求把全片每个区域都擦到
+    # 封面这一帧上。那既逼着 generate_cover 去擦不存在的区域（03 因此在科比脸上
+    # 压出一块黑方块），也让「这一帧本来干净、一个区域都不用擦」被判成失败。
+    # 现在以 cover 写入的 frame_clean_expected 为准；旧 cover-plan 没有该字段时，
+    # 就地按 selected_frame.timestamp_sec 过滤，行为一致。
     plan_items = [i for i in loc_plan.get("items", [])
-                  if i.get("action") in ("remove", "translate") and i.get("bbox")]
+                  if i.get("action") in ("remove", "translate", "replace")
+                  and i.get("bbox")]
     cleaned = render_info.get("frame_cleaned_regions", 0)
+    selected_ts = (cover_plan.get("selected_frame") or {}).get("timestamp_sec")
+    expected = render_info.get("frame_clean_expected")
+    if expected is None:
+        if selected_ts is None:
+            expected = len(plan_items)
+        else:
+            expected = len([i for i in plan_items
+                            if i.get("start_time") is None
+                            or i.get("end_time") is None
+                            or float(i["start_time"]) - 1e-6
+                            <= float(selected_ts) <= float(i["end_time"]) + 1e-6])
     frame_clean_ok = True
-    if plan_items and profile_style.get("clean_frame_enabled", True):
-        frame_clean_ok = cleaned >= len(plan_items)
+    if expected and profile_style.get("clean_frame_enabled", True):
+        frame_clean_ok = cleaned >= expected
         if not frame_clean_ok:
-            log.warning(f"Cover frame should clean {len(plan_items)} regions but cleaned {cleaned}")
+            log.warning(f"Cover frame should clean {expected} regions (on screen at "
+                        f"{selected_ts}s) but cleaned {cleaned}")
 
     # 安全带校验：TikTok 只在主页网格/搜索结果里显示 9:16 封面的中间部分，
     # 标题或品牌署名落到带外，用户在自己的主页上根本看不到它们
@@ -396,7 +474,8 @@ def check_cover(output_dir: str, work_dir: str) -> Dict:
     return {
         "status": status,
         "detail": "; ".join(warnings) if warnings else
-                  f"Faces: {faces}, occluded: {face_occluded}, chinese: 0, color: yellow, brand: ok",
+                  f"Faces: {faces}, occluded: {face_occluded}, chinese: 0, color: yellow, "
+                  f"brand: ok, cleaned {cleaned}/{expected} on-screen regions",
         "face_occluded": face_occluded,
         "subject_occluded": False,  # V1 简化
         "faces_detected": faces,
@@ -408,11 +487,48 @@ def check_cover(output_dir: str, work_dir: str) -> Dict:
         "text_in_safe_band": safe_ok,
         "text_outside_safe_band": outside,
         "frame_cleaned_regions": cleaned,
+        "frame_clean_expected": expected,
+        "frame_clean_at_sec": selected_ts,
     }
 
 
+def _volumedetect(path: str):
+    """对音频文件跑 ffmpeg volumedetect，从 stderr 解析 (mean_db, max_db)。
+    ⚠️ 不能加 -v error：volumedetect 走 info 级，加 -v error 后输出消失（见 SKILL §9）。
+    返回 None 表示解析失败或无音频流。"""
+    try:
+        r = run([
+            "ffmpeg", "-i", path,
+            "-af", "volumedetect",
+            "-f", "null", "-",
+        ], check=False)
+    except Exception:
+        return None
+    out = (r.stderr or "") + "\n" + (r.stdout or "")
+    mean = max_db = None
+    for line in out.splitlines():
+        if "mean_volume:" in line:
+            try:
+                mean = float(line.split("mean_volume:")[1].split("dB")[0].strip())
+            except Exception:
+                pass
+        elif "max_volume:" in line:
+            try:
+                max_db = float(line.split("max_volume:")[1].split("dB")[0].strip())
+            except Exception:
+                pass
+    if mean is None and max_db is None:
+        return None
+    return (mean, max_db)
+
+
 def check_audio(output_dir: str, work_dir: str) -> Dict:
-    """检查音频：响度、中文残留"""
+    """检查音频：① 是否有音轨；② TTS 轨是否被压死在 BGM 下（amix 漏 normalize=0）；
+    ③ 片头是否近静音。
+
+    ⚠️ 本函数**不做语音内容分析**（中/英判别留给人工 Whisper 抽听，见 SKILL §14.8）。
+    但第 ② 项是对 2026-09-29 03 实锤 bug 的自动闸门：tts_track.wav 若峰值 < -40dB，
+    即 amix 漏加 normalize=0 的实锤（03 当时 max=-36dB = 1/64），成片会"只有 BGM 没有解说"。"""
     final_path = os.path.join(output_dir, "final.mp4")
     plan = load_json(work_path(work_dir, "localization-plan.json"), {})
     audio_strategy = plan.get("audio_strategy", "keep_original")
@@ -420,39 +536,79 @@ def check_audio(output_dir: str, work_dir: str) -> Dict:
     if not os.path.exists(final_path):
         return {"status": "fail", "detail": "final.mp4 not found"}
 
-    # 响度检测
-    loudness_ok = True
+    # 1) 是否有音轨
+    has_audio = False
     try:
-        r = run([
-            "ffmpeg", "-i", final_path,
-            "-af", "loudnorm=print_format=json",
-            "-f", "null", "-",
-        ], check=False)
-        # 简单检查是否有音频流
         r2 = run([
             "ffprobe", "-v", "error",
             "-show_entries", "stream=codec_type",
             "-of", "csv=p=0",
             final_path,
         ])
-        has_audio = "audio" in r2.stdout
-        loudness_ok = has_audio
+        has_audio = "audio" in (r2.stdout or "")
     except Exception:
-        loudness_ok = False
+        has_audio = False
 
-    # 中文残留检查（V1 简化：策略为 mute 时检查是否有音频）
-    chinese_residual = False
-    if audio_strategy == "mute_original_tts_bgm":
-        # V1 不做音频内容分析，假设 TTS 是英文
-        chinese_residual = False
+    if not has_audio:
+        return {"status": "fail", "detail": "final.mp4 has no audio stream"}
 
-    status = "pass" if loudness_ok else "warning"
+    warnings = []
+    detail_parts = [f"strategy={audio_strategy}"]
+
+    # 2) TTS 轨电平（仅 mute_original_tts_bgm 等会产出 tts_track.wav）
+    tts_track_path = work_path(work_dir, "tts_track.wav")
+    tts_max = tts_mean = None
+    if os.path.exists(tts_track_path):
+        vt = _volumedetect(tts_track_path)
+        if vt:
+            tts_mean, tts_max = vt
+            detail_parts.append(f"tts_track max={tts_max:.1f}dB mean={tts_mean:.1f}dB")
+            # 正常 TTS 峰值约 -3 ~ -6dB；amix 漏 normalize=0 时会按 1/线索数 缩放，
+            # 64 条 cue → 峰值 ÷64 ≈ -36dB。用峰值阈值 -25dB 干净分离（buggy 必现，正确轨远高于）。
+            if tts_max is not None and tts_max < -25.0:
+                warnings.append(
+                    f"TTS 轨峰值异常低（max={tts_max:.1f}dB）：疑似 amix 漏加 normalize=0，"
+                    f"人声被压死在 BGM 下，见 SKILL §14.8"
+                )
+    else:
+        # TTS 策略但找不到中间轨：无法自动验证，提示人工 Whisper 抽听
+        if audio_strategy == "mute_original_tts_bgm":
+            detail_parts.append("tts_track.wav 缺失，无法自动验证 TTS 电平")
+            warnings.append(
+                "tts_track.wav 不在 work/ 中，无法自动判定 TTS 是否被压死；"
+                "请按 SKILL §14.8 人工 Whisper 抽听成片头部"
+            )
+
+    # 3) 片头近静音 sanity（抽前 15s）
+    head_max = None
+    try:
+        scratch = tempfile.mkdtemp(prefix="ttl-qa-head-")
+        head_wav = os.path.join(scratch, "head.wav")
+        run([
+            "ffmpeg", "-y", "-i", final_path,
+            "-t", "15", "-vn", head_wav,
+        ], check=False)
+        if os.path.exists(head_wav):
+            vh = _volumedetect(head_wav)
+            if vh:
+                h_mean, head_max = vh
+                detail_parts.append(f"head(15s) max={head_max:.1f}dB")
+                if head_max is not None and head_max < -45.0:
+                    warnings.append(
+                        f"片头 15s 近静音（max={head_max:.1f}dB）：人声可能缺失或被静音"
+                    )
+    except Exception:
+        pass
+
+    status = "warning" if warnings else "pass"
     return {
         "status": status,
-        "detail": f"Audio strategy: {audio_strategy}, loudness ok: {loudness_ok}",
-        "loudness_ok": loudness_ok,
-        "chinese_residual": chinese_residual,
+        "detail": "; ".join(detail_parts) + (("; WARN: " + " | ".join(warnings)) if warnings else ""),
         "audio_strategy": audio_strategy,
+        "tts_track_max_db": tts_max,
+        "tts_track_mean_db": tts_mean,
+        "head_max_db": head_max,
+        "warnings": warnings,
     }
 
 
@@ -513,6 +669,10 @@ def main():
     ap.add_argument("--output-dir", required=True, help="Output directory")
     ap.add_argument("--residue-fps", type=float, default=1.0,
                     help="成品中文残留扫描抽帧率（默认 1fps；闪现字幕多时可设 2）")
+    ap.add_argument("--residue-single-frame-conf", type=float, default=0.9,
+                    help="只被 1 个采样帧检出时，需要多高的置信度才算「真残留」。默认 0.9"
+                         "（真烧录字幕持续 >=1s 必然多帧命中；人脸/快速缩放图形会被误读成 CJK，"
+                         "典型是单帧 + 低置信度）。设 0 可关闭该剔除逻辑。")
     args = ap.parse_args()
 
     require_tools("ffmpeg", "ffprobe")
@@ -526,7 +686,8 @@ def main():
     audio_check = check_audio(args.output_dir, args.work_dir)
     localization_check = check_localization(args.output_dir, args.work_dir)
     log.info("  对成品 final.mp4 全片跑中文残留硬门禁（这一步不看 plan，只看画面）...")
-    residue_check = check_chinese_residue(args.output_dir, args.work_dir, args.residue_fps)
+    residue_check = check_chinese_residue(args.output_dir, args.work_dir, args.residue_fps,
+                                          single_frame_min_confidence=args.residue_single_frame_conf)
 
     # 汇总降级
     degradations = []

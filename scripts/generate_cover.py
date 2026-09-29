@@ -145,8 +145,43 @@ def compute_sharpness(image_path: str) -> float:
 # --------------------------------------------------------------------------
 # Frame cleaning (pipeline-specific: stays out of the engine)
 # --------------------------------------------------------------------------
-def clean_frame_with_plan(img, plan_items, blur_radius=25, blur_alpha=210,
-                          inpaint_radius=5):
+def select_cleanable_items(plan_items):
+    """plan 里真正需要在画面上擦除的项（有 bbox 且动作会动画面）。"""
+    return [i for i in (plan_items or [])
+            if i.get("action") in ("remove", "translate", "replace")
+            and i.get("bbox")]
+
+
+def plan_items_at(plan_items, frame_time, eps=1e-6):
+    """只保留 ``frame_time`` 那一刻**真的在屏幕上**的项。
+
+    封面是**单帧快照**，而 localization-plan 覆盖整条片子：不加时间过滤就会把
+    全片 65 个区域统统擦一遍，其中"没出现在这一帧上"的区域等于凭空挖掉画面。
+
+    2026-09-29 实例（03 湖人传奇羁绊）：plan 里唯一的 ``caption_overlay``
+    remove 项是 0.6–3.4s 的中屏中文关键词弹窗，bbox h=128 ⇒ 走「大区域」分支
+    （高斯模糊 + 82% 压暗）；封面帧取在 t=236.85s，那一刻屏上什么都没有，
+    结果在科比脸上压出一块 361x191 的黑方块。同 01/02 没事，因为它们的
+    plan 里没有 h>100 的项。
+
+    ``start_time``/``end_time`` 缺失的项视为常驻（保守：宁可擦，不可留中文）。
+    ``frame_time is None`` 时退化为旧行为（全部清理），供单独调用者使用。
+    """
+    if frame_time is None:
+        return list(plan_items or [])
+    out = []
+    for it in plan_items or []:
+        st, en = it.get("start_time"), it.get("end_time")
+        if st is None or en is None:
+            out.append(it)
+            continue
+        if float(st) - eps <= float(frame_time) <= float(en) + eps:
+            out.append(it)
+    return out
+
+
+def clean_frame_with_plan(img, plan_items, frame_time=None, blur_radius=25,
+                          blur_alpha=210, inpaint_radius=5):
     """按 localization-plan 清理封面帧上的中文/水印（与视频清理一致）
 
     规则（与 SKILL.md 中文去除方式一致）：
@@ -155,6 +190,9 @@ def clean_frame_with_plan(img, plan_items, blur_radius=25, blur_alpha=210,
     封面帧必须与视频一致地干净，禁止把中文/水印带入封面。
     注意：封面会放大渲染（720p→1080x1920），模糊必须比视频清理更重
     （默认 radius=25 / alpha=210），否则放大后中文仍可辨认。
+
+    ``frame_time`` 传入封面帧时间戳后，只有该时刻在屏的项会被清理
+    （见 ``plan_items_at``）——否则会把全片的区域都擦到这一帧上。
 
     Returns:
         (清理后的 PIL Image, 清理项计数)
@@ -166,9 +204,7 @@ def clean_frame_with_plan(img, plan_items, blur_radius=25, blur_alpha=210,
     except ImportError:
         return img, 0
 
-    items = [i for i in (plan_items or [])
-             if i.get("action") in ("remove", "translate", "replace")
-             and i.get("bbox")]
+    items = select_cleanable_items(plan_items_at(plan_items, frame_time))
     if not items:
         return img, 0
 
@@ -357,15 +393,21 @@ def main():
     headline = (args.headline or plan.get("headline")
                 or understanding.get("cover_headline") or DEFAULT_HEADLINE)
 
-    plan_items = (load_json(work_path(args.work_dir, "localization-plan.json"),
-                            {}) or {}).get("items", [])
+    plan_raw_items = (load_json(work_path(args.work_dir, "localization-plan.json"),
+                               {}) or {}).get("items", [])
+    # The cover is ONE frame: only the overlays on screen at that instant may be
+    # cleaned. Cleaning the whole plan painted 03's 0.6-3.4s keyword pop-up onto
+    # a t=236.85s frame as a black block (2026-09-29).
+    frame_time = selected_frame.get("timestamp_sec")
+    plan_items = plan_items_at(plan_raw_items, frame_time)
+    items_at_frame = select_cleanable_items(plan_items)
 
     from PIL import Image
     img = Image.open(selected_frame["path"]).convert("RGB")
     src_size = {"width": img.width, "height": img.height}
     cleaned_count = 0
     if cover_style.get("clean_frame_enabled", True):
-        img, cleaned_count = clean_frame_with_plan(img, plan_items)
+        img, cleaned_count = clean_frame_with_plan(img, plan_raw_items, frame_time)
 
     spec = build_spec(headline, cover_style, plan, args)
     result = render_cover(img, spec)
@@ -382,6 +424,11 @@ def main():
     render_info["faces_detected"] = len(face_areas)
     render_info["face_areas"] = face_areas
     render_info["frame_cleaned_regions"] = cleaned_count
+    # QA compares cleaned vs expected -- expected means "on screen at the
+    # selected frame", not "everywhere in the video".
+    render_info["frame_clean_expected"] = len(items_at_frame)
+    render_info["frame_clean_at_sec"] = frame_time
+    render_info["plan_items_total"] = len(plan_raw_items)
     render_info["lines"] = result.meta["headline_lines"]
     # font_used keeps the historical meaning (first name in the chain);
     # font_resolved is the file actually used -- reporting the first chain name
@@ -414,7 +461,10 @@ def main():
 
     log.info(f"Cover generated: {cover_path}")
     log.info(f"  Headline: '{headline}', Faces: {len(face_areas)}, "
-             f"cleaned regions: {cleaned_count}")
+             f"cleaned regions: {cleaned_count}"
+             + (f" of {len(items_at_frame)} on screen at {frame_time}s"
+                if frame_time is not None else "")
+             + f" (plan total {len(plan_raw_items)})")
 
 
 if __name__ == "__main__":

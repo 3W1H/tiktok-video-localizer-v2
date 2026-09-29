@@ -150,10 +150,21 @@ def detect_asr_hallucination(segs, conf_threshold=-0.70, repeat_ratio=0.40,
 # ============================================================
 # 风格判定
 # ============================================================
-def classify(f0_median, rate_cps, energy_db, full_db):
-    """-> (gender, style, reasons)"""
-    gender = "male" if (f0_median or 0) < F0_SPLIT_HZ else "female"
-    reasons = [f"F0 中位数 {f0_median:.0f}Hz -> {'男声' if gender=='male' else '女声'}"]
+def classify(f0_median, rate_cps, energy_db, full_db, f0_low=None):
+    """-> (gender, style, reasons)
+
+    ⚠️ 性别判据用 **F0 低分位（p25）**，不是中位数（2026-09-28 修正）。
+    为什么：`estimate_f0_track` 是逐帧自相关法，在高频段有**倍频（octave）假象**，
+    叠加底噪/BGM 后中位数会被系统性抬高。实测本轮 03（中文男声解说，245s）：
+      * F0 中位数 166.7Hz > F0_SPLIT_HZ(165) → 旧判据给出**女声**（错）
+      * 但 F0 p25 = 110.2Hz，且 80-140Hz 区间占全部浊音帧的 37%
+      * 女声的 F0 几乎不可能低于 ~150Hz，不可能有 37% 的帧在 140Hz 以下
+    所以改用 p25：低于 165Hz 即男声。中位数只作为透明性指标一并记录。
+    """
+    ref_hz = f0_low if f0_low else f0_median
+    gender = "male" if (ref_hz or 0) < F0_SPLIT_HZ else "female"
+    reasons = [f"F0 p25 {ref_hz:.0f}Hz / 中位数 {f0_median:.0f}Hz -> "
+               f"{'男声' if gender=='male' else '女声'}"]
 
     # 情绪强度：解说比全片背景高出多少 dB
     rel = (energy_db - full_db) if (energy_db is not None and full_db is not None) else 0.0
@@ -272,6 +283,8 @@ def analyze(video_path, asr=None, asr_path=None):
     speech = np.concatenate(pieces)
     f0s, clar = estimate_f0_track(speech, sr)
     f0_median = round(float(np.median(f0s)), 1) if f0s else None
+    # p25：性别判据用它，而不是中位数（见 classify 的说明）
+    f0_low = round(float(np.percentile(f0s, 25)), 1) if f0s else None
     clarity = round(float(np.median(clar)), 3) if clar else 0.0
     if f0_median is None:
         warnings.append("F0 不可测（清晰帧不足），性别按男声兜底")
@@ -284,7 +297,7 @@ def analyze(video_path, asr=None, asr_path=None):
     sp_rms = float(np.sqrt((speech ** 2).mean()) + 1e-9)
     energy_db = round(20.0 * np.log10(sp_rms), 2)
 
-    gender, style, reasons = classify(f0_median, rate_cps, energy_db, full_db)
+    gender, style, reasons = classify(f0_median, rate_cps, energy_db, full_db, f0_low)
     params = tts_params(gender, style, f0_median, rate_cps)
 
     return make_result(
@@ -297,6 +310,7 @@ def analyze(video_path, asr=None, asr_path=None):
         narration_total_sec=round(total_speech, 2),
         analyzed_sec=round(speech_sec, 2),
         f0_median_hz=f0_median,
+        f0_p25_hz=f0_low,
         f0_clarity=clarity,
         speech_rate_cps=rate_cps,
         cjk_chars=n_cjk,

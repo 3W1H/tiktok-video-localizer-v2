@@ -28,16 +28,42 @@ from common import (
 )
 
 
+def probe_src_fps(video: str, fallback: float = 30.0) -> float:
+    """源片帧率。用来把 "N FPS 采样" 换算成帧步长。"""
+    r = run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=r_frame_rate",
+             "-of", "default=noprint_wrappers=1:nokey=1", video], check=False)
+    try:
+        num, _, den = (r.stdout or "").strip().partition("/")
+        v = float(num) / float(den or 1)
+        return v if v > 0 else fallback
+    except Exception:
+        return fallback
+
+
 def extract_coarse(video: str, work_dir: str, coarse_fps: float, scene_threshold: float) -> list:
-    """Pass 1: 粗采样 - 1FPS + 场景变化"""
+    """Pass 1: 粗采样 - 1FPS + 场景变化
+
+    ⚠️ 取帧必须走 `select='not(mod(n,period))'`，**不能用 `-vf fps=N`**：
+    fps filter 的输出帧**不含源片第 0 帧**（实测 1FPS 取到的是 t=0.4667 / 1.4667 / 2.4667…，
+    比标注晚 ~0.53s，且整段漏掉 t=0）。于是"只在第 0 帧出现"的中文标题卡
+    （02 的「30队巡礼之国王」、03 的「OK组合」、09 的「2012年全明星赛」）
+    永远进不了 OCR 网格 —— 而 QA 也用同一套取帧方式，**因此也永远查不出来**。
+    2026-09-29 修复：改成按帧号取 n=0,period,2*period…（时间戳 = i/coarse_fps，
+    既覆盖 t=0 又修掉了那 0.53s 的整体偏移）。
+    """
     frames_dir = ensure_dir(os.path.join(work_dir, "frames", "coarse"))
     scene_dir = ensure_dir(os.path.join(work_dir, "frames", "scene"))
     index = []
 
-    # 1FPS 定时采样
+    src_fps = probe_src_fps(video)
+    period = max(1, int(round(src_fps / coarse_fps)))
+    log.info(f"coarse sampling: src {src_fps:g}fps -> every {period} frame(s) "
+             f"= {coarse_fps:g}fps, starting at frame 0")
+
     run([
         "ffmpeg", "-y", "-i", video,
-        "-vf", f"fps={coarse_fps}",
+        "-vf", f"select='not(mod(n,{period}))'", "-vsync", "0",
         os.path.join(frames_dir, "c_%05d.png"),
     ])
 
@@ -47,7 +73,7 @@ def extract_coarse(video: str, work_dir: str, coarse_fps: float, scene_threshold
             "frame_id": f"c_{i+1:05d}",
             "pass": "coarse",
             "path": os.path.join(frames_dir, fn),
-            "timestamp_sec": round((i + 1) / coarse_fps, 3),
+            "timestamp_sec": round(i / coarse_fps, 3),
         })
 
     # 场景变化帧
@@ -92,12 +118,13 @@ def extract_dense(video: str, work_dir: str, dense_fps: float, windows: list,
             continue
 
         out_pattern = os.path.join(dense_dir, f"d_{wi:03d}_%05d.png")
+        period = max(1, int(round(src_fps / dense_fps)))
         run([
             "ffmpeg", "-y",
             "-ss", str(start),
             "-i", video,
             "-t", str(duration),
-            "-vf", f"fps={dense_fps}",
+            "-vf", f"select='not(mod(n,{period}))'", "-vsync", "0",
             out_pattern,
         ])
 
@@ -106,7 +133,7 @@ def extract_dense(video: str, work_dir: str, dense_fps: float, windows: list,
             if f.startswith(f"d_{wi:03d}_") and f.endswith(".png")
         ])
         for i, fn in enumerate(dense_files):
-            ts = round(start + (i + 1) / dense_fps, 3)
+            ts = round(start + i / dense_fps, 3)
             index.append({
                 "frame_id": f"d_{wi:03d}_{i+1:05d}",
                 "pass": "dense",
