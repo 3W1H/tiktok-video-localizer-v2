@@ -17,7 +17,7 @@ CoverSpec、落盘。（2026-09-27 之前这里另有一套渲染器，标题画
 
 ## 输出
 - `work/cover-plan.json`
-- `output/cover.jpg`
+- `cover.jpg`（视频根目录，与 `work/` 同级，**不要**套 `output/` 子目录）
 
 ## 步骤
 
@@ -47,7 +47,7 @@ CoverSpec、落盘。（2026-09-27 之前这里另有一套渲染器，标题画
 
 ### Step 3: 渲染封面（Profile 驱动）
 ```bash
-python scripts/generate_cover.py --work-dir work --output-dir output --profile {profile}
+python scripts/generate_cover.py --work-dir work --output-dir . --profile {profile}
 ```
 - 样式全部取自 `profile.cover_style`（`font_chain` 字体、`font_size` 主标题、
   `brand_size` 品牌、`fill_color` 颜色、`safe_zone_*_pct` 安全区、`picture_mode`）
@@ -60,12 +60,12 @@ python scripts/generate_cover.py --work-dir work --output-dir output --profile {
   （默认中心 1080×1080，`safe_zone_*_pct = 0.22`），主页网格裁切后仍完整可见
 - 脚本会打印 `safe-zone: composition A-B inside C-D -> OK|OVERFLOW`，
   **OVERFLOW 就是不合格**
-- 产出：`output/cover.jpg` + `work/cover-plan.json`（含 `render.text_regions` /
+- 产出：`cover.jpg`（视频根目录）+ `work/cover-plan.json`（含 `render.text_regions` /
   `brand_region` / `safe_text_zone` / `picture_src`，供 `qa_video.py::check_cover` 复核）
 
 ### Step 4（可选）: 用户自带封面图
 ```bash
-python scripts/generate_cover.py --work-dir work --output-dir output --profile {profile} \
+python scripts/generate_cover.py --work-dir work --output-dir . --profile {profile} \
     --cover-image /path/to/cover.png [--no-resize] [--no-text] [--bottom-text "..."]
 ```
 - 只做「按画幅适配 + 叠加标题/品牌」，**不改动用户的画面**

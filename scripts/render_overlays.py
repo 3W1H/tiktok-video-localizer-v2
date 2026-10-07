@@ -341,7 +341,7 @@ def build_overlays(plan, frame_w, frame_h, font_path, hook_seconds=3.4,
                         "kind": "logo"})
         if not logos and logo_text:
             # plan has no watermark slot (e.g. clean source) -> place the mark
-            cy = logo_y if logo_y is not None else frame_h * 0.66
+            cy = logo_y if logo_y is not None else frame_h * 0.9
             f, s = fit_width(font_path, logo_text, logo_ratio * frame_w)
             out.append({"text": logo_text, "cy": cy, "a": 0.0, "b": 9e9,
                         "font": f, "size": s, "fill": accent,

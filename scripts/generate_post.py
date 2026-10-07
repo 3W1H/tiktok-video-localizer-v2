@@ -283,32 +283,41 @@ def generate_default_pinned_comment(understanding: Dict, profile: str = "generic
     return comment
 
 
-def load_post_content(work_dir: str, profile: str = "generic") -> Dict:
-    """加载 Agent 生成的发布文案内容"""
-    post_content_path = work_path(work_dir, "post-content.json")
-    content = load_json(post_content_path, {})
+def load_post_content(work_dir: str, profile: str = "generic",
+                      agent_content: Optional[Dict] = None) -> Dict:
+    """加载并合并发布文案内容。
 
-    # 如果没有 Agent 生成的内容，从各 JSON 中提取基础信息
-    if not content:
-        understanding = load_json(work_path(work_dir, "video-understanding.json"), {})
-        plan = load_json(work_path(work_dir, "localization-plan.json"), {})
-        cover_plan = load_json(work_path(work_dir, "cover-plan.json"), {})
-        audio_plan = load_json(work_path(work_dir, "audio-plan.json"), {})
+    始终从 video-understanding / cover-plan / audio-plan 提取基础字段
+    （title / summary / cover_headline 等），再用 Agent 在 post-content.json
+    中提供的内容做部分覆盖。这样即便 Agent 只填了 caption / hashtags，
+    summary / title 也不会丢失而落为 N/A。
+    """
+    if agent_content is None:
+        agent_content = load_json(work_path(work_dir, "post-content.json"), {})
 
-        # 内容简介必须是英文
-        title = understanding.get("topic", "NBA Highlights")
-        summary = understanding.get("summary", "Career highlights and best plays.")
+    understanding = load_json(work_path(work_dir, "video-understanding.json"), {})
+    plan = load_json(work_path(work_dir, "localization-plan.json"), {})
+    cover_plan = load_json(work_path(work_dir, "cover-plan.json"), {})
+    audio_plan = load_json(work_path(work_dir, "audio-plan.json"), {})
 
-        content = {
-            "title": title,
-            "summary": summary,
-            "caption": f"{title} 🔥\n{summary}\nWhat do you think? 👇",
-            "hashtags": generate_default_hashtags(understanding, profile),
-            "pinned_comment": generate_default_pinned_comment(understanding, profile),
-            "bgm_recommendations": audio_plan.get("bgm_recommendations", []),
-            "cover_headline": cover_plan.get("headline", "MUST WATCH"),
-            "cover_design_note": "High contrast, bold typography, face/subject protected.",
-        }
+    # 内容简介必须是英文
+    title = understanding.get("topic", "NBA Highlights")
+    summary = understanding.get("summary", "Career highlights and best plays.")
+
+    content: Dict[str, Any] = {
+        "title": title,
+        "summary": summary,
+        "caption": f"{title} 🔥\n{summary}\nWhat do you think? 👇",
+        "hashtags": generate_default_hashtags(understanding, profile),
+        "pinned_comment": generate_default_pinned_comment(understanding, profile),
+        "bgm_recommendations": audio_plan.get("bgm_recommendations", []),
+        "cover_headline": cover_plan.get("headline", "MUST WATCH"),
+        "cover_design_note": "High contrast, bold typography, face/subject protected.",
+    }
+
+    # Agent 提供的内容部分覆盖（跳过空值，避免清空兜底字段）
+    content.update({k: v for k, v in agent_content.items()
+                    if v not in (None, "", [])})
 
     # 校验：标签必须恰好 5 个
     hashtags = content.get("hashtags", [])
@@ -533,11 +542,13 @@ def main():
 
     # 加载内容
     if args.post_content:
-        content = load_json(args.post_content, {})
+        agent = load_json(args.post_content, {})
         # 校验标签数量
-        hashtags = content.get("hashtags", [])
+        hashtags = agent.get("hashtags", [])
         if len(hashtags) != 5:
             log.warning(f"Hashtags count is {len(hashtags)}, expected exactly 5.")
+        # 仍用 understanding/cover-plan 兜底，再叠加 Agent 内容（避免 summary/title 缺失）
+        content = load_post_content(args.work_dir, args.profile, agent_content=agent)
     else:
         content = load_post_content(args.work_dir, args.profile)
 

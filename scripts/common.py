@@ -26,6 +26,34 @@ EXIT_DEGRADED = 1
 EXIT_FATAL = 2
 
 # ============================================================
+# 排名 / 倒计时叠字识别（共享，单一真源）
+# ============================================================
+# 篮球 / 体育集锦里常见的「排名 / 倒计时」叠字会承载「第几个球 / 第几名」语义信息，
+# 例如：凯文加内特生涯十佳球TOP10 / NO.7 / 第3球 / RANK 5 / 3/10 / BEST 9。
+# 这类 token 一旦被整体 remove（inpaint 抹掉），成片就丢失「第几个球」说明，
+# 因此必须「保留 + 翻译」，绝不能 blanket-remove。
+# 注意：只做机械正则匹配（数字 / 字母模式），不解释视频内容本身。
+RANKING_TOKEN_RE = re.compile(
+    r"(TOP\s*\d+|NO\.?\s*\d+|RANK\s*\d+|BEST\s*\d+|NO\s*\d+"
+    r"|第\s*\d+\s*(?:球|名|位|集|期|强)"
+    r"|\d+\s*/\s*\d+)",
+    re.IGNORECASE,
+)
+
+
+def extract_ranking_tokens(text: str) -> List[str]:
+    """返回文本里所有排名 / 倒计时 token（大写），没有则为空列表。"""
+    if not text:
+        return []
+    return [m.group(0).strip().upper() for m in RANKING_TOKEN_RE.finditer(text)]
+
+
+def has_ranking_token(text: str) -> bool:
+    """文本是否含排名 / 倒计时 token。用于规划守卫与 QA 闸门。"""
+    return bool(text) and bool(RANKING_TOKEN_RE.search(text))
+
+
+# ============================================================
 # 路径
 # ============================================================
 SKILL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

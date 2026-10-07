@@ -57,11 +57,15 @@ cp your-video.mp4 input/source.mp4
 python scripts/run_pipeline.py \
     --input input/source.mp4 \
     --work-dir work \
-    --output output \
     --profile generic
+# ⚠️ 不要传 --output output：那会在视频目录里再套一层 output/ 子目录。
+#    缺省时脚本自动推导输出目录（见下），交付物直接与 work/ 同级，不嵌套。
 
 # 3. 查看结果
-ls output/
+# 交付物（final.mp4 / cover.jpg / subtitles-en.srt / tiktok-post.md）位于推导出的输出目录：
+#   <源视频所在目录>/tiktok/<视频名简写>/
+# 与 work/ 同级，不要再套 output/ 子目录。
+ls <源视频所在目录>/tiktok/<视频名简写>/
 # final.mp4  cover.jpg  subtitles-en.srt  tiktok-post.md
 ```
 
@@ -71,7 +75,7 @@ ls output/
 |------|------|------|
 | `--input` | 输入视频路径 | 必需 |
 | `--work-dir` | 中间产物目录 | `work` |
-| `--output` | 最终输出目录 | `output` |
+| `--output` | 最终输出目录（可不传；缺省推导为 `<源视频目录>/tiktok/<视频名简写>/`，与 `work/` 同级，**不要**传 `output` 去套子目录） | 推导根目录 |
 | `--profile` | 风格配置：`nba` / `sports` / `generic` | `generic` |
 | `--review` | 低置信度项进入人工复核 | 关闭 |
 | `--logo` | 用户英文 Logo 资产路径 | 无 |

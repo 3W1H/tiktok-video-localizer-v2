@@ -31,6 +31,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (
     run, save_json, load_json, make_result, log,
     work_path, output_path, require_tools, check_python_package,
+    has_ranking_token,
 )
 
 
@@ -636,6 +637,18 @@ def check_localization(output_dir: str, work_dir: str) -> Dict:
     review_items = [i for i in plan.get("items", []) if i.get("action") == "review"]
     review_pending = len(review_items)
 
+    # 倒计时 / 排名叠字被删除检查（2026-10-07 新增）：
+    # 含排名 token（TOP N / NO.N / 第N球 / RANK N / N/M）的叠字承载「第几个球」语义，
+    # 若被设为 action=remove，成片会丢失 which-ball 说明。必须告警。
+    removed_countdowns = []
+    for it in plan.get("items", []):
+        if it.get("action") != "remove":
+            continue
+        txt = it.get("source_text") or ""
+        if has_ranking_token(txt) or it.get("contains_ranking_token"):
+            removed_countdowns.append(it.get("item_id"))
+    removed_countdowns = [x for x in removed_countdowns if x]
+
     # timeline 未解决
     timeline = load_json(work_path(work_dir, "timeline.json"), {})
     timeline_unresolved = len(timeline.get("unresolved", []))
@@ -651,6 +664,13 @@ def check_localization(output_dir: str, work_dir: str) -> Dict:
     if timeline_unresolved > 0:
         status = "warning"
         warnings.append(f"{timeline_unresolved} timeline issues unresolved")
+    if removed_countdowns:
+        status = "warning"
+        warnings.append(
+            f"item(s) {removed_countdowns} carry a countdown/ranking token but action=remove "
+            f"-> which-ball info will be lost; switch to translate (preserve & render English Top N), "
+            f"do NOT blanket-remove"
+        )
 
     return {
         "status": status,
@@ -660,6 +680,7 @@ def check_localization(output_dir: str, work_dir: str) -> Dict:
         "watermark_region_recheck": watermark_recheck,
         "review_items_pending": review_pending,
         "timeline_unresolved": timeline_unresolved,
+        "removed_countdowns": removed_countdowns,
     }
 
 

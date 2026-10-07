@@ -14,7 +14,7 @@
 - `profiles/{profile}.yaml`（post_style 段）
 
 ## 输出
-- `output/tiktok-post.md`（九段结构）
+- `tiktok-post.md`（视频根目录，与 `work/` 同级，**不要**套 `output/` 子目录；九段结构）
 
 ## 九段结构（以 `generate_post.py::render_markdown` 的实际顺序为准）
 1. **Video Summary**：主题 + 简介
@@ -54,7 +54,7 @@
 
 ### Step 5: 拼装 tiktok-post.md
 ```bash
-python scripts/generate_post.py --work-dir work --output-dir output --profile {profile}
+python scripts/generate_post.py --work-dir work --output-dir . --profile {profile}
 ```
 - 按模板拼装九段结构
 - 第八段「Processing Report」如实披露：
@@ -63,7 +63,7 @@ python scripts/generate_post.py --work-dir work --output-dir output --profile {p
   - 低置信度保留项（review_items）
   - timeline 未解决项
   - 清理低置信度区域
-- 产出：`output/tiktok-post.md`
+- 产出：`tiktok-post.md`（视频根目录）
 
 ## 规则
 - 最终用户输出是 Markdown，不是 JSON

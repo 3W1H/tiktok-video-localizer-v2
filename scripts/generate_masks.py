@@ -136,7 +136,8 @@ def main():
             masks=[],
             warnings=["No items to process"],
         )
-        save_json(work_path(args.work_dir, "masks-index.json"), result)
+        masks_dir = ensure_dir(os.path.join(args.work_dir, "masks"))
+        save_json(os.path.join(masks_dir, "masks-index.json"), result)
         return
 
     log.info(f"Generating masks for {len(items)} plan items")

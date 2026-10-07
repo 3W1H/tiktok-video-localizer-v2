@@ -23,8 +23,8 @@
 - `work/timing-decisions.json`（Agent 产出）
 - `work/timeline.json`（最终时间轴）
 - `work/audio-plan.json`
-- `output/final.mp4`
-- `output/subtitles-en.srt`
+- `final.mp4`（视频根目录，与 `work/` 同级，**不要**套 `output/` 子目录）
+- `subtitles-en.srt`（视频根目录，与 `work/` 同级）
 
 ## 步骤
 
@@ -111,7 +111,7 @@ python scripts/tts_timing.py apply --work-dir work
 ### Step 8: 混音（画面用已渲染好的 cleaned.mp4）
 ```bash
 python scripts/audio_processor.py mix --video work/cleaned.mp4 \
-    --work-dir work --output-dir output
+    --work-dir work --output-dir .
 ```
 - 按 audio_strategy：
   - `mute_original_tts_bgm`：静音原轨 + 英文 TTS（按 timeline 放置）+ BGM Asset（用户提供或本地曲库）+ 响度归一化
@@ -139,16 +139,16 @@ python scripts/audio_processor.py mix --video work/cleaned.mp4 \
 - ⭐ **混完音立刻记一笔**（不记下次就会重复用同一首）：
   ```bash
   python scripts/bgm_ledger.py record --track <BGM 文件> --video <源视频> \
-      --output-dir <产出目录> --profile <profile>
+      --output-dir <视频根目录（含 work/ 的那一层）> --profile <profile>
   ```
   ⚠️ `*_variant` 与母版算**同一首歌**（`normalize_track_key`）—— 台账按歌曲计数，
   所以"换了个 `_variant`"在观众耳里不算换歌（SKILL.md §12.4）
 - 无 BGM 时：纯 TTS，post.md 如实写"未混入 BGM"
-- 产出：`work/audio-plan.json` + `output/final.mp4`（画面 `-c:v copy` 复用 cleaned.mp4，只换音轨）
+- 产出：`work/audio-plan.json` + `final.mp4`（视频根目录，画面 `-c:v copy` 复用 cleaned.mp4，只换音轨）
 
 ### Step 9: 生成字幕文件（**只出 SRT，禁止烧录**）
 ```bash
-python scripts/render_subtitles.py --work-dir work --output-dir output
+python scripts/render_subtitles.py --work-dir work --output-dir .
 ```
 - 从 timeline.json 生成 SRT（不直接用 translated.json）
 - ⚠️ **不要加 `--burn`**：英文画面字幕已经由 `render_overlays.py` 精绘进 cleaned.mp4，
@@ -158,7 +158,7 @@ python scripts/render_subtitles.py --work-dir work --output-dir output
 - ⚠️ **SRT 为 0 字节时，QA 侧也要跳过 `--burn`**：`qa_video.py` 的
   `render_subtitles --burn` 拿空文件喂 ffmpeg 会 `rc=1`，把**整条 QA 链误判为 FAIL**（06 踩到）。
   该类视频的字幕验收改看**画面**（`render_overlays` 的叠字检查），不看 SRT 行数（SKILL.md §13.4）。
-- 产出：`output/subtitles-en.srt`
+- 产出：`subtitles-en.srt`（视频根目录）
 
 ## 异常处理
 - clean_video 退出码 1（replace 缺资产）→ Agent 降级该项为 remove 或 review

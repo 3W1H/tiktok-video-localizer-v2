@@ -198,6 +198,23 @@ input/
   ⚠️ **但"误读"也必须清**：QA 抽帧用的是同一个 OCR 引擎，误读必然复现，辩称「这是假阳性」过不了门禁。
   本批 3 处误读（LED 计时牌数字、球裤褶皱、广告牌+球衣交界、标题下暗部）全部按
   **QA 实测检出的 bbox** 做了 inpaint。
+- **⭐ 倒计时 / 排名叠字是「内容」不是「装饰」（2026-10-07 新增，违反即丢信息）**。
+  体育 / 集锦视频里常有一条**常驻标题条**同时带「中文前缀 + 排名 token」，例如
+  `凯文加内特生涯十佳球TOP10`、`NO.7`、`第3球`、`RANK 5`、`3/10`、`BEST 9`。
+  其中 `TOP10 / TOP9 / … / TOP1`、`NO.N`、`第N球` 这类 token 承载**「第几个球 /
+  第几名」语义**——它是观众判断「现在播到第几球」的唯一依据，**绝不能整体 remove**。
+  - OCR 会把「中文前缀 + 排名 token」合并成**一条** region（如 `…TOP10`），这是正常的；
+    不要因此把整条当普通 caption 抹掉。
+  - **禁止**：把含排名 token 的区域设成 `action=remove`（整条 inpaint 抹掉）→ 成片
+    丢失「第几个球」说明。正确做法：**保留 + 翻译**（`action: translate`）。
+  - **倒计时是动态的**：合并后的 region 里往往藏着多段不同 token（TOP10→TOP9→…→TOP6），
+    渲染时**必须按段动态显示英文 `Top 10 / Top 9 / … / Top 1`**，不能冻结成一个静态
+    `Top 10`，也不能为避让底部 logo 直接删掉。
+  - **避让 logo 的正确姿势**：若底部 logo 与倒计时条冲突，把**倒计时条整体（含排名 token）
+    一起挪到顶部或其它安全区**，并保持动态；不要删。
+  - 工具侧已加固：`prepare_plan.py` 会对含排名 token 的 region **强制 `action=translate`**
+    并打 `contains_ranking_token` / `dynamic_ranking` 标记；`qa_video.py::check_localization`
+    会对「含排名 token 却被 `action=remove`」的 item **发 WARNING**（闸门见 `removed_countdowns`）。
 
 ### 2. Confidence 三档
 

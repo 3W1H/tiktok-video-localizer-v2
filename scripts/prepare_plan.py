@@ -36,6 +36,8 @@ from common import (  # noqa: E402
     normalize_persistent_starts,
     log_persistent_snaps,
     load_profile,
+    has_ranking_token,
+    extract_ranking_tokens,
 )
 
 CJK = re.compile(r"[\u4e00-\u9fff]")
@@ -169,6 +171,21 @@ def build_items(regions: list, W: int, H: int) -> list:
     for i, r in enumerate(sorted(regions, key=lambda x: x["start"]), start=1):
         best = max(r["tracks"], key=lambda t: (t.get("detection_count", 0), t.get("confidence", 0)))
         category, action, confidence = classify_region(r, W, H)
+        # 倒计时 / 排名叠字守卫（2026-10-07 新增）：
+        # 含排名 token（TOP N / NO.N / 第N球 / RANK N / N/M / BEST N）的区域承载
+        # 「第几个球」语义，绝不能整体 remove —— 否则成片丢失 which-ball 说明。
+        # 两个陷阱都要堵：
+        #  (a) 几何分类器把「左对齐的底部倒计时条」误判成 logo（left_ratio<0.12），
+        #      logo 默认 remove，且 render 对 category=logo 的 translate 项**不绘制**
+        #      → 原文被 inpaint 抹掉、英文又补不回来。故强制 translate 并把 logo 纠正为 title。
+        #  (b) 即使分类成别的，也强制 translate，绝不允许整体 remove。
+        ranking_tokens = set()
+        for t in r["tracks"]:
+            ranking_tokens.update(extract_ranking_tokens(t.get("text", "")))
+        if ranking_tokens:
+            action = "translate"
+            if category == "logo":
+                category = "title"
         # mask 外扩 3px（ rule 12.2：贴合即可，禁止大块矩形）
         bbox = {
             "x": max(0, int(r["x0"]) - 3),
@@ -196,6 +213,24 @@ def build_items(regions: list, W: int, H: int) -> list:
                 f"TODO(agent): verify time range visually, then fill target_text."
             ),
         }
+        if ranking_tokens:
+            item["contains_ranking_token"] = True
+            item["ranking_tokens"] = sorted(ranking_tokens)
+            # 合并 track 里出现 >1 个不同排名 token（如 TOP10/TOP9/.../TOP6）
+            # → 倒计时是**按段动态**的，渲染时不能冻结成一个静态值。
+            item["dynamic_ranking"] = len(ranking_tokens) > 1
+            dyn_note = (
+                "DYNAMIC across segments -> render per-segment English Top N, "
+                "do NOT freeze to one value and do NOT remove"
+                if item["dynamic_ranking"] else "render as English Top N"
+            )
+            item["reason"] = (
+                f"region carries countdown/ranking token(s) {sorted(ranking_tokens)} "
+                f"({dyn_note}) -> action forced to translate. "
+                f"TODO(agent): MUST preserve & translate; never set action=remove here "
+                f"or the which-ball info is lost. If a logo collision forces moving the "
+                f"title, move the countdown WITH it (keep it dynamic), not delete it."
+            )
         if action == "translate":
             item["replacement"] = {
                 "asset": None,

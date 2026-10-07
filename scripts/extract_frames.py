@@ -105,6 +105,7 @@ def extract_dense(video: str, work_dir: str, dense_fps: float, windows: list,
     dense_dir = ensure_dir(os.path.join(work_dir, "frames", "dense"))
     index = []
 
+    src_fps = probe_src_fps(video)
     for wi, w in enumerate(windows):
         start = max(0, float(w["start"]) - pad_sec)
         end = float(w["end"]) + pad_sec
