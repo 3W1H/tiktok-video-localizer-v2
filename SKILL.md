@@ -215,6 +215,19 @@ input/
   - 工具侧已加固：`prepare_plan.py` 会对含排名 token 的 region **强制 `action=translate`**
     并打 `contains_ranking_token` / `dynamic_ranking` 标记；`qa_video.py::check_localization`
     会对「含排名 token 却被 `action=remove`」的 item **发 WARNING**（闸门见 `removed_countdowns`）。
+- **⭐ 清理框必须覆盖「整个徽章色块」，不能只框住文字（2026-10-08 新增，违反即留"箭头"）**。
+  搬运方常在中文标题下垫一块**两端带尖角的彩色横幅**（橙/红/黄），或在水印前放一个
+  **播放图标**。OCR 只给**文字**的 bbox，于是 inpaint 只抹掉文字那一段，**色块两端的尖角
+  原样留下 —— 成片看起来就是标题两侧各一个"箭头"**（用户 2026-10-08 当场发现）。
+  同理，底部徽章的彩色描边/外框也会残留成红/黄块。
+  - **做法**：以 OCR bbox 为锚点，在**上下左右各 ±80px 的窗口内**检测**高饱和彩色像素**
+    （HSV `S>110 且 V>120`）的包围盒，把 item 的 `bbox` 扩到该彩色范围，**再**跑
+    `generate_masks.py`。取**多帧并集**（本批用前 12 个 coarse 帧），避免单帧误判。
+  - **防跑飞**：彩色检测只允许在 OCR 框 ±80px 内；且若结果**同时触及画面左右两边**
+    （`x0≤12 且 x1≥W−12`）说明检到的是**画面本身**而非徽章 → 丢弃该结果、回退到 OCR 框。
+    （本批 720×1280 的片子里标题压在画面上，无此保护时会被撑到整宽、误伤画面。）
+  - **改完 bbox 必须重跑 `generate_masks.py` 并重渲该条**；封面若取自
+    `render_overlays --save-clean-base` 的干净帧，也**必须一并重出**，否则封面会留着旧箭头。
 
 ### 2. Confidence 三档
 
@@ -231,6 +244,151 @@ input/
 - **ASR 检测到中文旁白** → `mute_original_tts_bgm`：静音原轨 + 英文 TTS + Instrumental BGM
 - **无中文旁白，保留原声** → `keep_original`：完整保留原声（现场声/欢呼/环境音）
 - **无中文旁白，去掉原声换 BGM** ⭐ → `remove_original_bgm_only`：去掉原视频所有音频（篮球声+原BGM），只混合推荐的纯 BGM（无歌词）。适合篮球集锦类视频，节奏感更强
+  - ⚠️⚠️ **该分支曾经漏掉响度归一化（2026-10-16 修复）**。`_normalize_loudness()` 在
+    `mute_original_tts_bgm` / `duck_original_add_bgm` 两个分支里都有，**只有本分支没有** ——
+    于是 `audio-plan.json` 里写了 `"loudness_normalized": true` 也**被静默忽略**：
+    BGM 只吃到 `bgm.volume_db` 的衰减就出货了。实测 03 奥尼尔：
+    成品 **−28.0 LUFS**（= Metalmania 母带 −9.8 减去 18dB），比 `I=-16` 的目标低 **12 LU**。
+    整批 10 条都偏低。改动见 `audio_processor.py` 的 `remove_original_bgm_only` 分支。
+  - ⚠️ 归一化必须**两遍**。单遍 = loudnorm 的 `dynamic` 模式，在动态范围大的曲子上会**欠调**
+    （实测 Harmful or Fatal `input_lra 16.7`，只补了 +8.6 dB，目标 −16 只做到 −24）。
+    正确做法：第一遍 `print_format=json` 量出 `measured_I/TP/LRA/thresh/offset`，
+    第二遍 `linear=true` 一次到位。修复后 03 奥尼尔实测 **−16.24 LUFS / TP −0.75 dBTP**。
+  - ⭐ **`bgm.tone`：把 BGM 的高频收敛掉（去镲 / de-cymbal，2026-10-16 新增）**。
+    触发语句长这样：「为什么背景音乐还有打镲的声音呢，要鼓点，鼓不要打铁片的那种声音」。
+    **顺序不能颠倒 —— 先定位是谁发的声，再决定换曲还是修音色**：
+    1. **归属判定**。把成品音轨和 `audio-plan.json` 里那首 BGM 母带**逐频带比对**
+       （`kick 40-110 / snare 150-400 / mid 250-1k / presence 4k-8k / air 8k-16k` 能量占比）。
+       本策略下成品原声**一点没留**，所以两份数值只要一致，就**证明镲声 100% 来自我们选的
+       BGM**（06 科比实测逐条一致到小数点后两位）。反例要记牢：`duck_original_add_bgm`
+       保留了原声，那种情况下的镲可能来自原片，**换 BGM 治不好**。
+    2. **量化**。`6–16 kHz` 带通后做瞬态计数 —— 每一声"打镲"就是一次宽带高频瞬态。
+       06 科比改前 **272 次/分**（≈八分音符 hi-hat），高频能量占比在高潮段从 4% 冲到 **25%**。
+       对照：`Faster Does It` 的 `hat/kick` = 0.95~1.06，**镲比鼓还多**。
+    3. **两个手段，换曲优先**：
+       - **换曲**：选曲除了 BPM，加看两个新指标 —— **`hat/kick` 比**（越低镲越少）与
+         **kick 密度**（越高越过瘾）。本批把 `music/` 下 35 个文件全扫了一遍，未用曲目里
+         最优是 `Volatile Reaction`（hat/kick 0.60、kick 157 次/分、7–15.5k 仅 3.0%）。
+       - **`bgm.tone` 高频收敛**（本次新增旋钮，`audio-plan.json` 驱动、profile 无关）：
+         ```json
+         "bgm": {"asset_path": "...", "volume_db": -18,
+                 "tone": {"high_shelf_hz": 8000, "high_shelf_db": -8}}
+         ```
+         实现是 `audio_processor.py::bgm_tone_filter()` → ffmpeg `highshelf`，
+         **四个策略分支全部生效**；缺省或 `high_shelf_hz: 0` = 不改动，保持历史行为。
+         **为什么搁架是"只削镲、不削鼓"的精准工具**：镲片是宽带瞬态噪声，能量几乎全在
+         6–16 kHz；而 kick 在 40–110 Hz、snare 主体在 150–400 Hz、snare 的脆度在 2–6 kHz
+         —— 8 kHz 搁架碰不到它们。06 科比实测：7–15.5 kHz 占比 **5.12% → 1.61%**、
+         高潮段 **8.95% → 1.73%**；细分 4–8k **−39%** / 8–12k **−68%** / 12–16k **−84%**，
+         同时 kick 瞬态计数**不变**。量级参考：−4 轻微、**−8 明显**、−12 接近发闷；
+         `high_shelf_hz` 低于 6000 就会开始削到 snare 的脆度。
+       - ⚠️ **但搁架只对"高频镲"有效，不是万能药（2026-10-16 08 罗斯实测）**。
+         先用**逐 1/3 倍频程瞬态计数**看清镲的能量到底在哪 —— 同一件事在不同的曲子上
+         落点能差一个八度：
+         | 曲目 | 1k | 2k | 4k | 6.3k | 8k | 16k | kick |
+         |---|---|---|---|---|---|---|---|
+         | 06 科比 `Faster Does It` | — | — | — | — | 镲主导 | 镲主导 | — |
+         | **08 罗斯 `Ready Aim Fire`** | **158** | **187** | **209** | **214** | **215** | **215** | 70 |
+         罗斯这条的 hi-hat 是**从 1 kHz 一路铺到 16 kHz 的宽带瞬态**，8 kHz 搁架 −10 dB
+         实测只把镲段落压低 **1.41 dB**、**瞬态计数一声没少**（213.8 → 213.8）—— 几乎无效。
+         这时改用**峰值均衡**（2026-10-16 新增的旋钮）：
+         ```json
+         "tone": {"peak_hz": 5000, "peak_db": -14, "peak_octaves": 2.5}
+         ```
+         编译成 `equalizer=f=5000:width_type=o:w=2.5:g=-14`（`peak_octaves` 缺省 2.0）。
+         实测：镲段落 **−7.89 dB**，而 kick **−0.04 dB**、snare 主体 **−0.09 dB** ——
+         鼓零损伤。成品端 4–8k 能量占比 **2.031% → 0.119%（−94%）**、
+         7–15.5k 全片 **9.485% → 3.107%（×0.327）**、高潮段 **9.984% → 3.083%**。
+         📌 **参数必须实测扫，不要凭听感**（`reports/*-eq-sweep*.json` 就是扫描留痕）：
+         同一组数字在不同曲子上差很多；本条还额外验证了搁架方案确实无效才换的。
+         📌 **先问"用户满意的是哪一半"再动手**：用户说「**鼓点对**，但打铁片声很刺耳」，
+         那"鼓点"就是**不能动的约束**，所以走修音色、不走换曲；反过来若用户说
+         「这鼓听着不对」，才轮到换曲。方向搞反会直接否掉用户认可的那部分。
+       - ⚠️ **换曲的量化门槛**（曲库扫描给客观依据）：`hat/kick` 比 = 6–16k 瞬态数 ÷
+         kick 瞬态数，**越低镲越少**。全库 37 个文件实测（`reports/library-scan.json`）：
+         `Five Armies` 0.21 / `Sneaky Adventure` 0.29 / `Crusade` 0.56 ≤ … ≤
+         `Ready Aim Fire` **2.65** / `Cut and Run` 44.3。**罗斯那条最初选的
+         `Ready Aim Fire` 是全库镲片第二重的曲目** —— 用这个指标选曲本可提前避开。
+         选曲时同时看：`hat/kick` ≤ 0.8、kick 密度 ≥ 90/分、曲长 ≥ 片长、曲尾静音 ≈ 0。
+    ⚠️ **一次要做完的两件收尾事**：① 换曲后 `generate_post.py` 必须重出 `tiktok-post.md`
+    （署名是从 `audio-plan.json` 反查曲库生成的，**不重出就会写成上一首**）；
+    ② 新曲要 `bgm_ledger.py add` 入册，否则 `generate_post.py` 只能兜底推断许可 ——
+    见 §6 关于「署名版本号」的说明。
+    换曲还会**顺带修好节奏对齐**：06 科比原曲 `Faster Does It` 与视频差 14.4%（超 ±6% 容差，
+    只能放弃 atempo），换成 `Volatile Reaction` 后 Δ4.3% → `atempo=1.0447` 真正把 BPM 拉到
+    视频的 158.8，`bgm-plan.status` 从 `ok_with_warnings` 变成 **`ok` 零警告**，
+    drop 准准落在视频 88.12s 的高潮上。
+  - 🔴 **`bgm` 落点对齐 / 回卷规则（2026-10-16 修掉两个 bug，必读）**。触发语句：
+    「这个背景音乐怎么老是一个调呢，而且也不连贯」。查下来是**两个 bug 叠加**，
+    单看代码都"像是对的"：
+    1. **`analyze_bgm.plan_alignment` 的偏移量符号写反了**。`loop_shift` 分支原本写
+       `need = -offset`，那是**互补值**（曲长 − p）不是 p。不变式只有一条：
+       > 从曲内第 p 秒起播、播到曲尾后回卷到曲首，drop（曲内位置 d，变速 s 后为 d/s）
+       > 落在视频第 T 秒 ⟺ **`p ≡ d/s − T  (mod 曲长/s)`**
+       雷阿伦那条：曲长 155.85s、drop 1.88s、高潮 146.0s → 正确 **p = 11.73s**，
+       旧代码给 **144.12s**（= 155.85 − 11.73，正好是互补值）。
+    2. **`audio_processor.build_bgm_track` 里 `atrim=start` 在 `aloop` 之前**。
+       atrim 已经把前面切掉，`aloop` 循环的是**切剩下的那一段**，不是整曲 ——
+       于是「从 144.12s 起播」的循环体只有 **11.73s**，同一小段被搬运 **13.4 次**；
+       而 Five Armies 曲尾是 5s 淡出到数字静音，所以**每 11.75s 出现一个 5.00s 静音空洞**。
+    两 bug 叠加的实测成品：**全片 41% 是静音**（13 处 × 5s）、整体 RMS **−33.9 dBFS**、
+    自相关在 **11.73s** 处相似度 **0.92**（= 同一小节重复）。用户听到的"一个调"就是它。
+    **修法**：
+    - 引擎改成显式**回卷（rotate）**：`asplit` 分成两路 → `atrim=start=p` 与 `atrim=end=p`
+      → `concat` → 再 `aloop`。这样**循环体 = 整曲**，`p` 只决定从哪儿进门。
+      `start_offset_sec` 因此必须解释在 **atempo 之后**的时间轴上（滤镜顺序是
+      `atempo → 回卷 → 循环`）—— 偏移量漏掉 `/s` 换算会差出好几拍（Nightmare Machine
+      那例 s=0.9624、d=156.62s，漏换算差 6.1s ≈ 14 拍）。对拍落点的正确写法：
+      `p = (d/s − T) mod (曲长/s)`。
+    - **选曲优先选「不需要回卷」的**：曲长/s − p ≥ 片长 ⟺ 曲内存在一个
+      **d/s ≥ T** 的晚 drop。雷阿伦定稿的 Nightmare Machine（226.5s，drop 156.6s）
+      起播点 16.74s、播到 174.45s < 235.30s → **全程零拼接零重复**，这是首选形态。
+      回卷只应发生在"曲子比视频短"或"drop 靠前"时，且回卷点必然落在
+      **视频 T − d/s** 处（与曲长无关）—— 所以 drop 越靠前，回卷越晚。
+    - 🔴 **先问「片子装不装得下」，再问「drop 对不对得上」（2026-10-16 08 罗斯新增）**。
+      视频强度曲线是 `flat` 时**没有真实高潮可对**（`climax_mid` 只是能量平台的起点），
+      此时对齐毫无收益，却要付一次回卷的代价 —— 而**回卷点很可能正好落在曲尾的
+      淡出/静音尾巴上**。实测 08 罗斯：`Ready Aim Fire` 曲长 216.95s、曲尾 211.75s
+      起淡出、最后 2.0s 是数字静音；片长 202.66s、profile=flat。旧的 drop 对齐给出
+      `offset=54s` 并回卷 → 曲尾那 **3.5s 静音落到了视频 159–163s**，片子中间凭空空掉。
+      **修法**：`analyze_bgm.useful_end()` 先量出「曲尾有用端」（最后一个电平仍在
+      峰值 −20 dB 之上的位置），然后只要 **`片长 ≤ 有用端`** 且 profile 为 flat，
+      就 `method="as_is"`、`offset=0` **从曲首平铺，绝不回卷**。罗斯改后：
+      静音空洞 **7 窗 / 3.5s → 0 窗 / 0.0s**。
+      📌 这条与"选曲优先选不需要回卷的"是同一件事的两面：**能平铺就平铺**。
+    - 🔴 **「一首完整的 BGM，不要多段拼凑」= 零拼接（2026-10-16 09 韦德新增）**。
+      用户对韦德扣篮混剪的原话：「背景音乐怎么也是拼起来的呢，要一首完整的 bgm
+      不要多段拼凑」。**凡是能一次连续播完的，就不许出现任何回卷/循环**——
+      回卷必然在听感上留一条缝（切断 → 跳到曲子另一端 → 曲尾静音被搬进片中）。
+      - **怎么证实"拼了几段"**：`map_bgm_segments.py`（新工具）。对每个 4s 视频窗
+        在母带上做归一化互相关（FFT，母带频谱只算一次），取最佳 lag。**连续播放
+        的 mapping 是一条斜率 +1.0 的直线**，斜率断裂处就是拼接点。韦德改前：
+        **2 段、1 处拼接**（视频 66.0s，母带 165.4s → 96.0s，跳 −69.3s）；改后
+        **1 段、0 处拼接**（母带 1.12s → 123.12s，一条直线）。
+      - **曲首垫片必须"截断"不能"回卷"**：很多曲子开头有 0.5–1.5s 数字静音
+        （`Black Vortex` 前 0.83s < −60 dBFS）。平铺时若把它当 `start_offset_sec`
+        走回卷分支，这段静音会被搬到**片尾**去。新增 `useful_start()` 量出起音点，
+        写入 `alignment.head_skip_sec`，引擎用**输入级 `-ss`** 截断。
+      - ⚠️ **顺带发现的一类"假静音"**：`Black Vortex` 在曲内 121.75–125.25s 有一段
+        **弱奏**（−28 → −51 dBFS）。它经 `volume_db: -18` 之后在成品里就跌破
+        −50 dBFS —— 于是回卷会让**同一段弱奏在片中出现两次**（韦德改前 22.5s 与
+        92.5s，间隔正好 = 旧循环体 69.84s）。**判静音洞时要把"曲子本身的弱奏段"
+        先排除**，别把它算成拼接造成的。
+      - 📌 验收现在要加第三条硬指标：**`map_bgm_segments.py` 输出的段数必须 = 1**。
+    - 回归测试：`tests/test_bgm_alignment.py`（**9 条**断言：落点不变式、偏移不是互补值、
+      `/s` 换算、够长时不许回卷、flat 视频不回卷进尾巴、`useful_end` 要取淡出起点、
+      `useful_start` 要认出曲首垫片、垫片走 `head_skip_sec` 而非回卷、drop 对齐分支不许塞垫片）。
+      跑法 `python tests/test_bgm_alignment.py`。
+    **验收两条硬指标（改完必须量）**：① 成品 ≤0.5s 的静音空洞数（`-55 dBFS` 阈值）；
+    ② `4–40s` 自相关无 ≥0.25 的重复峰；③ `map_bgm_segments.py` 段数 = 1。
+    改后雷阿伦：**0 处空洞 / 无重复峰**；改后韦德：**0 处空洞 / 1 段 / 0 拼接**。
+    **排查同类片子**：把每条 `bgm-plan.json` 的 `曲长 − start_offset_sec` 当成"旧循环体"，
+    只要 **片长 ÷ 旧循环体 ≥ 2** 就中招（本批 10 条里除雷阿伦外还有 5 条，
+    其中 4 条因曲尾淡出而真的出现 0.7–2.5s 空洞）。
+    ⚠️ **这条规则只覆盖"循环体太短"那一类**。韦德那条是"循环体 = 69.84s、只回卷
+    1 次"——`片长 126.3 ÷ 69.84 = 1.81 < 2`，**旧规则会漏掉它**。所以筛查必须补上
+    一条：**只要 `method == "loop_shift"`（即发生过回卷），就一律重新按"零拼接"
+    复核一遍**（片长 ≤ `useful_end − useful_start` 时改判 `as_is`）。回卷一次也是拼接。
 - **无中文旁白，但不想丢现场氛围** ⭐ → `duck_original_add_bgm`（2026-09-28 新增）：
   **保留原片全部音频、整体压到 `duck.volume_db`（默认 −15dB）**，再叠一层授权 BGM。
   集锦片用它能同时拿到"观众欢呼还在"和"BGM 主导节奏"。`remove_original_bgm_only` 会把现场声
@@ -487,11 +645,37 @@ input/
    - 同时给出**北京时间**和对应**美国东部时间（ET）**
    - 推荐首选 + 次选两个时间点
 6. **Caption 必须英文**：主标题 + 备选标题，包含 emoji 和互动引导
+7. **BGM 署名必须从登记表来，不能靠兜底推断**（2026-10-16）：
+   `generate_post.py::resolve_music_credit()` **只认 `audio-plan.json` 的 `bgm.asset_path`**
+   —— 换过曲却没重出 post，署名就会老老实实写成**上一首**（06 科比换曲时实测）。
+   它按曲名去 `configs/bgm-library.yaml` + `configs/bgm-library-added.json` 查元数据，
+   **查不到就按 `_LOCAL_MUSIC_FALLBACK` 兜底并打 WARNING**。
+   所以**新曲必须先 `bgm_ledger.py add` 入册**，否则署名里的许可版本号是猜出来的。
+   📌 **版本号以 4.0 为准**：incompetech 的 FAQ 现在统一写「Licensed under Creative
+   Commons: By Attribution 4.0」并直接给出 `creativecommons.org/licenses/by/4.0` 的 PDF。
+   早年曲目是 3.0 发布的，CC 授权不可撤销 → 写 3.0 也不算错，但既然版权方现行声明是 4.0，
+   登记值与兜底值都应跟 4.0 对齐（2026-10-16 已把 `_LOCAL_MUSIC_FALLBACK` 3.0 → 4.0；
+   批内更早的 8 条 post 仍是 3.0，同样合法，未强制重出）。
 
 **generate_post.py 自动校验**：
 - 标签数量 ≠ 5 → WARNING + 自动调整
 - 缺少置顶评论 → 使用默认模板（含三要素）
 - 缺少 BGM 推荐 → 从 bgm-library.yaml 自动推荐
+
+### 7. 成片首帧：正片直入（2026-10-25 定稿）
+
+**第 0 帧必须是正片画面。禁止标题卡、logo 卡、封面复刻帧。**
+
+封面 `cover.jpg` 已经承载了内容标题、简介和品牌 logo，视频开头再放一遍是重复信息：
+白吃 1.5 秒、拉低前 3 秒留存，还会让"封面 vs 首帧"看起来像同图复用。
+
+- `originalize_video.py` 默认不生成片头卡；`--title/--subtitle` 已降级为 LEGACY，
+  传了只会打 WARNING 忽略，确需时才加 `--title-card`。
+- 标题只写进 `cover.jpg` 与 `tiktok-post.md`；画面上的栏目条/角标直接叠在正片上，
+  第 1 秒淡入上浮，不占时长。
+- QA 新增 `opening_frame` 检查：元数据自报、0.70–1.35s 静止检测、首帧与封面相似度，
+  任一命中打 WARNING。
+- 完整规范与"为什么废止"见 **§11.1**（唯一出处，改规则只改那里）。
 
 ## 处理记录与防重复上传（必读）
 
@@ -735,9 +919,10 @@ python scripts/inpaint_video.py --video input/source.mp4 --output output/final.m
 ### 6. 视频与封面分离
 
 **原则**：
-- 视频只处理画面（去中文、加英文标题、加logo）
+- 视频只处理画面（去中文、加英文标题、加logo）——这里的"加标题/logo"指**叠加在正片画面上**的栏目条/角标，不是片头卡
+- **第 0 帧必须是正片画面**：不放标题卡、logo 卡、封面复刻帧（详见 §11.1）
 - **不在视频里合成封面图**，不替换第一帧为封面
-- 封面单独生成 `cover.jpg` 文件
+- 封面单独生成 `cover.jpg` 文件，标题/简介/品牌只在这里出现一次
 - 用户上传平台时，手动选择视频文件和封面文件
 
 ### 7. 文件完整性验证
@@ -781,9 +966,12 @@ python scripts/inpaint_video.py --video input/source.mp4 --output output/final.m
 
 **文字**：`Hoop Dynasty Daily`（首字母大写）。**位置：底部**。
 
-- **只属底部，不得挪到顶部。** 顶部是 headline 区，两者不得互换。
+- **只属底部，不得挪到顶部。** 品牌署名永远是文字栈的**最后一行** —— `stack` 版式
+  （2026-10-15 起 nba 默认）下整块文字只有一栈，署名仍在栈底；`safe` 版式下署名贴底、
+  主标题浮在安全带顶部。两者不得互换。
   ⚠️ 事故档案：2026-09-27 曾把品牌画到封面顶部，**并把本文件改写去"配得上"该实现**，
   被用户当场纠正。**实现与文档冲突时改实现，绝不允许改文档去合理化实现。**
+  （2026-10-15 换成单块版式是用户在三版对比图里明确点选的结果，不属于此列。）
 - **字号**：封面取 `cover_style.brand_size`（nba = **64px @1080 宽**），**绝对值，
   不随主标题缩放**。旧实现写成 `font_size * 0.5`，导致不同 profile 出 63/56/45 三种字号。
 - **字体**：Impact（即 `font_chain` 第一个已安装项），见 8.2。
@@ -882,6 +1070,14 @@ nba 的 `["Anton","Impact","Arial Black","sans-serif"]` 实测落到 **Impact**�
   结果 **QA 读 profile 永远 PASS，实际像素却比规格暗一档**。
   现已在两个函数里改为 `accent = tuple(style.get("fill_color") or GOLD)`（`GOLD` 仅作兜底默认）。
   实测修复前后同一封面：像素 `(255,208,0)` → `(255,220,0)`，定稿后 → `(255,232,0)`。
+- **副标 / 口号的字色同样归 profile**（2026-10-15 新增，**默认值不变**）：
+  `cover_style.sub_color`（默认 `[196,196,196]` 灰）与 `cover_style.tagline_color`
+  （默认 `[255,255,255]` 白）。在此之前这两行是 `cover_engine` 里的模块字面量
+  `GREY` / `WHITE`，与本节「脚本里不得出现颜色字面量」那条自相矛盾。现由 `resolve()`
+  解析进 `Resolved.sub_color` / `Resolved.tag_color`（`compose()` 与 `letter_cover()` 都读它）。
+  CLI 单次覆盖：`generate_cover.py --sub-color '#FFE800' --tagline-color '#FFE800'`。
+  默认值是历史行为，**改 profile 前先出对比图目视确认** —— nba 现在的字色层级是
+  「金 = 主角（标题/数据行/署名），灰 + 白 = 辅助（球队副标 / 口号）」三级。
   **教训与本节开头的"规则有多份"同源：文档写了、实现没做、QA 又只查文档 → 三方一致地错。**
 - ⚠️ **同一个品牌色出现在两个渲染器里**：封面走 `cover_engine`，视频内 title/hook/logo 走
   `render_overlays.py`。后者现在也通过 `--profile`（读同一个 `fill_color`）取色，
@@ -954,14 +1150,222 @@ nba 的 `["Anton","Impact","Arial Black","sans-serif"]` 实测落到 **Impact**�
 
 版式参数（`make_cover.py`，同样可从 `cover_style` 读）：
 
-- `--layout safe`（默认）：整个排版挤进安全带。`--layout classic` 是旧的全画布版式，
-  **只有复现旧封面时才用**，它会打印 `classic layout ... get cropped in the profile grid` 警告。
+- `--layout safe|stack|classic`（nba profile 现为 `stack`）：
+  - `safe`：主标题浮在安全带顶部、数据行+署名贴在底部 —— **两组文字**。
+  - `stack`（2026-10-15 用户定稿）：主标题/副标/数据行/口号/署名合并成**一整块**，
+    贴安全带底部，距下沿 80px。见下方「单块版式」。
+  - `classic` 是旧的全画布版式，**只有复现旧封面时才用**，它会打印
+    `classic layout ... get cropped in the profile grid` 警告。
 - `--picture fill|band`：`fill` = 画面铺满安全带、文字压在画面上（配 `--scrim` 造渐变，
   画面最大，2026-09-27 定稿）；`band` = 画面只占文字之间的横条、文字落在干净背景上。
   两者安全区保证相同。
 - `--backdrop blur|black`：安全带以外用「模糊压暗的整帧」填充（默认），全屏看是满幅的，
   网格里被裁掉的只是背景虚化，无信息损失。
 - `--focus 0..1`：画面在干净带内的取景中心。**换帧后必须目视确认头顶没被切**（本例 fill 取 0.42）。
+
+**画面一律 cover-拟合，绝不拉伸（2026-10-15 修）**：
+`compose()` 的缩放是 `scale = max(canvas_w/src_w, img_h/src_h)`，再从缩放后的图里
+居中裁一个 `canvas_w × img_h` 的窗口（`picture_src.crop_origin_x` 记录横向偏移，
+`map_boxes_to_canvas()` 会减掉它）。曾经的 `scale = canvas_w/src_w` 只保证**宽度**填满：
+1280×720 的横屏源片缩放后只有 607px 高，而画面带高 1075px，那张 607px 的图被
+**硬拉成 1075px** —— 整幅画面纵向拉伸 1.77 倍，球员全被拉长
+（2026-10-15 用户「封面里画面被拉长」，`video-b1374643` 莫兰特、`video-bd71bcd1` 奥尼尔
+源片分别为 1280×720 / 1280×960，被拉 1.77x / 1.33x）。
+修后横屏源片改为 `scale = 1075/720 = 1.49`（放大后裁掉左右），竖屏源片
+（720×1280，`scale = 1.5 > 0.84`）**逐字节不变** —— 已用同一 plan 重渲染比对 md5 验证。
+**判据**：任何改动后拿一条竖屏 plan 重渲染，md5 必须与交付文件一致（横屏那条另看比例）。
+
+**底部三行的行高与行距（2026-10-15 定稿，`cover_engine.py`）**：
+
+底部栈固定为 `stat → tagline → 品牌署名`，自 `s_bot` 向上倒推。
+
+- ⭐ **品牌署名行必须按「墨迹框」前进，不能用 `block_h()`。**
+  `draw_brand_lockup` 的绘制层上下各留 `size*0.55` 的描边/发光余量，64px 的
+  字在 **127px** 的层里；而且 Impact 的字形并不在该 padding 内垂直居中
+  （`getbbox('Hoop Dynasty Daily')` = `(0,14,498,71)`，墨迹中心比层中心**高 21px**）。
+  把**层**居中到行中心，墨迹就整体上移 21px 压进上一行。
+  正确的行高来自 `brand_lockup_box()` 返回的 `ink_top/ink_bottom`（含描边+发光半径），
+  绘制时用 `cy = 行顶 - ink_top + layer_h/2` 把墨迹对齐行框。
+  ⚠️ 事故档案：2026-10-15 十条 NBA 封面**全部** `logo.y - tag.bottom = -20`（负数＝重叠），
+  真实墨迹间隙 ≈ 0px，"THE FLASH" 与 "Hoop Dynasty Daily" 糊成一团
+  —— 用户原话「下方的 logo 和文字混在一起」。**这是排版 bug，不是审美问题。**
+- **`BRAND_LEAD = 0.60`**：品牌行**上方**的间距按其上一行高度的 0.60 倍给，
+  而不是 `ROW_GAP`（0.16）。品牌是署名不是 tagline 的第三行，需要独立呼吸感。
+  修复后 `tag → logo` 间隙 10 条实测 **+27 ~ +30px**。
+- **底部预留 `pad_bottom = safe_h * 0.008`**（顶部仍是 `pad = safe_h * 0.030`）。
+  ⚠️ 别顺手把 `pad_bottom` 改回 `pad`：品牌行尺寸改诚实后整个底部栈会变高 ~24px，
+  用 0.030 倒推会把 `stat` 行顶高 24px —— 2026-10-15 实测 D-Rose 的 stat 因此
+  压进人脸框（它本来是十条里**唯一** `cover=pass` 的）。用 0.008 倒推则
+  `stat` 墨迹顶回到 1199（单行）/ 1044（双行），与改动前逐像素一致。
+- **QA 记录的是墨迹框**：`brand_region` / `text_regions` 里的 logo 项写的是
+  墨迹框（h≈71），不再是 127px 的绘制层 —— 否则 `cover` 检查的
+  人脸遮挡判定与安全带判定都会按不存在像素的位置来算。
+- 自检：`safe-zone: composition 454-1489 inside 422-1497`；且逐条断言
+  相邻 `text_regions` 间隔 **≥ 0**（2026-10-15 后十条均为 +18 ~ +30）。
+
+**单块版式 `layout: stack`（2026-10-15 用户定稿，nba profile 默认）**：
+
+`safe` 版式把主标题浮在安全带顶部、数据行+署名贴底 = **两组文字**。在 TikTok 的
+**1:1 主页网格窗口**（中心 1080×1080 = y 420–1500）里，这读作「上下一人一坨」，
+而且贴着窗口上下沿：标题墨迹距上沿 34px、**署名墨迹距下沿只有 11px**
+（`pad_bottom = safe_h * 0.008` 是当天修「logo 压 tagline」时把整个底部栈向下顶 50px
+造成的 —— 修一个 bug 引入另一个）。用户原话：「**封面上的文字怎么都变成了上下呢，
+下方的 logo 和文字混在一起**」，并在三版对比图里选了「**合并成一块 + 往里收 + 拉开行距**」。
+
+- 实现：`cover_engine.compose()` 里 `stack = spec.layout == "stack"` →
+  `dc_replace(spec, layout="safe")` **复用 fill 的全部几何**（画面铺满安全带、
+  backdrop、scrim），只改三处：① `build_rows()` 前置 `headline` / `sub` 两行；
+  ② 不再单独画浮在顶部的标题；③ scrim 深度撑到块顶（`s_bot - rows_y + 3%`），
+  否则块的上半截压在没压暗的画面上。
+- 行距常量（只在 `stack` 下生效，`safe` 仍用 `ROW_GAP`/`BRAND_LEAD`）：
+
+  | 常量 | 值 | 作用 |
+  |---|---|---|
+  | `STACK_ROW_GAP` | 0.24 | 块内相邻行间距（× 本行高） |
+  | `STACK_GROUP_LEAD` | 0.060 | 标题组 → 数据行组的分组间距（× 安全带高） |
+  | `STACK_BRAND_LEAD` | 0.80 | 品牌署名上方间距（× tagline 行高） |
+  | `STACK_BOTTOM_INSET` | 0.075 | 块底距 `s_bot`（× 安全带高，≈80px） |
+
+- 实测（十条）：块内墨迹间距 `head→sub +39~+47 / 分组 +77~+78 / stat→tag +76 /
+  tag→brand +36~+39`（两行数据行内部 +18），**分组间距必须是最大的那个**，
+  否则又读成两组。块底固定在 `s_bot - 80 = 1417`，1:1 窗口下沿留 **~83px**。
+- 自检：`composition 654-1417`（两行数据行）或 `820-1417`（单行）`inside 422-1497`。
+  ⚠️ 块高 = 固定字号行高之和 + 行距，**最坏情况（两行标题 + 两行数据行 + 副标）
+  约 886px = 安全带的 82%** —— 再加一行就会 OVERFLOW，动文案前先看 `safe_zone` 自检行。
+- QA 影响：单块更大，`face occluded by text` 更容易命中（十条里 9 条 warning、
+  马布里 pass）—— 属已知结构性问题（选帧按 `face*1000` 评分，高分帧必是特写）。
+- 预览/回退：`generate_cover.py --layout safe` 可单次回到两组版式；
+  `--safe-top/--safe-bottom`（如 0.25）可把整块再往里收。
+- 备份：改版前的 10 张 `cover.jpg` 在 `/tmp/covers-safe-bak/`（临时目录，重启即失）。
+
+**块位置与块内字号：`stack_anchor` / `block_scale` / `drop_rows`（2026-10-15 第二轮）**：
+
+贴底锚定只解决了一半问题。整块**贴在安全带底部**意味着无论块多高，它的下沿永远在
+`s_bot - 80`，于是十张封面的文字一律压在 1:1 窗口的下半部分、末行口号紧贴署名。
+用户第二轮反馈：「**标题太靠下了，已经和底部的 logo 放到一起了**」，并给了两条路
+（① 精简标题 ② 字号缩小一点 + 上移），同时明确「**遮脸这个可以不用作为强制要求**」
+—— 这句话是关键授权：块之所以贴底，本来就是躲脸躲出来的，放宽后才有上移的空间。
+
+- ⚠️ **先记住这个反直觉点：对贴底锚定的块做「精简」会把标题推得更低。**
+  块由**下沿**锚定，少一行 → 块变矮 → 块顶反而下移。实测雷阿伦去掉副标行后
+  块从 `820-1417` 变成 `932-1417`，标题下移 112px。**所以「缩短」和「上移」是两件事，
+  必须分别控制**，`cover_engine` 因此给了三个独立旋钮：
+
+  | profile 键（`cover_style`） | 默认 | 作用 |
+  |---|---|---|
+  | `block_scale` | 1.0 | 块内字号乘数（主标题/副标/数据行/口号）。**署名不参与** —— 它按 `brand_size` 渲染，是签名不是标题行 |
+  | `stack_anchor` | `bottom` | 块在安全带内的位置：`bottom`（旧行为）/ `center` / `top` |
+  | `stack_bottom_inset_pct` | `0.075` | 仅 `bottom` 锚定时生效：块底距 `s_bot`（× 安全带高） |
+  | `drop_rows` | `[]` | 整行丢弃，取 `sub` / `stat` / `tag` 任意组合（`headline` 与署名不可丢） |
+
+  CLI 一一对应：`--block-scale` / `--stack-anchor` / `--stack-inset` / `--drop-rows`。
+  四个值都会被 `write_plan()` 写进 `work/cover-plan.json` 的 `profile_cover_style`，
+  所以**用哪套参数出的图，plan 里就记着哪套**，可直接复现。
+
+- 2026-10-15 定稿（用户第二条路 = 字号缩小 + 上移）：`nba.yaml` 里
+  `block_scale: 0.88` + `stack_anchor: center`。十条实测：
+
+  | | 改前（贴底） | 改后（0.88 + 居中） |
+  |---|---|---|
+  | 单行数据行的 5 条 | 块 `820-1417` | 块 `688-1231` |
+  | 双行数据行的 5 条 | 块 `654-1417` | 块 `688-1231`（8 条）/ `615-1304`（2 条） |
+
+  意外收益：字号 ×0.88 后 SHAQ 的 `21 DUNKS IN 6 GAMES`、科比那条的
+  `2003 PLAYOFF SCORING` 都**从两行收成一行**，十条里 8 条的块几何变成完全一致的
+  `688-1231` —— 主页网格里横向对齐，比改前（两种高度混排）整齐得多。
+
+- ⚠️ **上移会把人脸重新撞进来**（这就是「遮脸不用强制」的代价）：第二轮时马布里那条
+  上移后标题压到了**背景球员**的脸，`qa_video` 立刻从 `pass` 变 `warning`，
+  当时给它单独用了 `--stack-anchor bottom --stack-inset 0.17`（块 `779-1315`）。
+  **单张保底的做法值得记着**：**判据是先算净空、再渲染实测** ——
+  该帧人脸在画布 `y606-778`，标题行高 103，所以标题整体要落在 `y≤503` 或 `y≥778`；
+  选后者（下移 90px）而不是前者（要顶到 422，块会跳成完全不同的观感）。
+  第三轮用户再次明确「遮脸不用强制」后，**这条特例已撤掉，十条统一走同一套参数**。
+
+**第三轮（同日，用户：「再往上一点，这跟 logo 挨着」+「框里中间的小字是什么，必须存在吗」）**：
+
+- **副标行（`sub`）在 1:1 窗口里正好落在垂直正中**。窗口 `422-1497`，中心 `959`；
+  `center` 锚定下 `sub` 行（`NBA LEGEND` / `MIAMI HEAT` / `LAKERS`）就压在这个位置，
+  在主页缩略图上就是「框里中间一行莫名其妙的小字」。它的内容是队伍 / 身份，属**装饰性**
+  信息，删掉不减损卖点 → `drop_rows: [sub]`。**`stat`（数据行）必须保留**，那是卖点本身。
+- **`stack_anchor: top`** —— 块顶固定在 `s_top + 0.10*safe_h` = `529`。
+  比 `center` 好在**块顶与块高解耦**：十条封面的主标题纵向完全对齐，也不会再出现
+  「删掉一行、标题反而下移」那种耦合（见上面那个反直觉点）。
+- **`STACK_BRAND_LEAD` 0.80 → 1.15**（`cover_engine.py` 常量）：署名与上一行间距
+  `38px → 50px`。署名是**签名**不是内容行，需要独立留白（用户「这跟 logo 挨着」）。
+  因为块顶已锚定，这个改动只把署名往下推，**不动标题**。
+
+  | | 第二轮（0.88 + center） | 第三轮（0.88 + top + 去 sub） |
+  |---|---|---|
+  | 单行数据行 8 条 | 块 `688-1231` | 块 `536-980` |
+  | 双行数据行 2 条（韦德 / 隆多） | 块 `615-1304` | 块 `537-1126` |
+
+- **代价**：压脸从 0 条变 5 条（罗斯 / SHAQ / 莫兰特 / 约基奇 / 马布里），
+  用户已授权「遮脸不用强制」。目检确认这些是文字块叠在球员身上，**不是压在眼睛上**，
+  可接受；要消掉就得把标题降回 `center` 档。
+- 自检：`safe-zone: composition 536-980 inside 422-1497 -> OK`；`cover_qa_sync.py`
+  → 5 条 `cover pass`、5 条 `cover warning`（全部只由 `face_occ=True` 引起）。
+- 回退：`nba.yaml` 的 `stack_anchor` 改回 `center` 并删掉 `drop_rows` 行即回到第二轮；
+  单张备份为 `work/cover.bak-center-<ts>.jpg` + `work/cover-plan.bak-center-<ts>.json`
+  （更早的贴底版是 `*.bak-bottom-*.jpg`）。
+
+**第四轮（同日，用户：「小字不能去掉吗？而且不能再和 Logo 之间的间距再大一点吗」）**：
+
+- **口号行（`tag`）也删掉** → `drop_rows: [sub, tag]`。上一轮删的是 `sub`，块里还剩一行
+  最小字号（`tag`：`THE FLASH` / `FEAR WAS NEVER THE ISSUE` …，`44×0.88 = 39px`），
+  它在缩略图上仍然是「一行小字」。删净后封面只剩
+  **球员名（112）→ 数据卖点（112）→ 署名（64）** 三行，层级一眼可读。
+  `stat` 是卖点本身，**永远不删**。
+- **`STACK_BRAND_LEAD` 1.15 → 0.175，且基准从「上一行行高」改成「安全带高度」**
+  （`cover_engine.gap_after` 里 `nxt == "logo"` 分支）。原因有两个：
+  ① 用户要「和 Logo 的间距再大一点」；
+  ② 旧的「×上一行行高」在数据行换行的两条上会失控 —— 韦德 `193 CM OF PURE VIOLENCE`、
+     隆多 `PASSES NOBODY ELSE SEES` 的数据行高 236 而非 118，署名会**比别条多下移 ~190px**。
+     改成 `0.175 × safe_h(1075) ≈ 188px` 后，**十条留白完全一致，与数据行是否换行无关**。
+- **`drop_rows` 只对 `stack` 布局生效**（`cover_engine.build_rows`：`drop = ... if stack else set()`）。
+  它是**块内**旋钮；`safe` 回退版式画的是「标题组 + 底部组」两组、不走这个 builder，
+  必须与用户此前签收的样子逐像素一致。改这一行同时让
+  `test_safe_layout_still_renders_two_groups` 保持原样通过。
+- **实测**：8 条单行数据行块 `529-1052`；2 条双行（韦德 / 隆多）块 `529-1170`；
+  块顶仍固定在 `529`（十条主标题依然纵向对齐）。署名上方实测 `195px` 净空。
+- **测试**：`test_stack_layout_is_one_bottom_block` 的旧断言写着「**任何**行间距都不得超过
+  `0.09×safe_h`，否则又会读成两组」。这条正是第四轮**故意**推翻的 —— 署名不是内容行，
+  而是**签名**。断言改成两条：内容行之间仍守 `0.09×safe_h` 上限；
+  `->logo` 那一段改为**校验规则本身**（实测值必须等于 `safe_h × STACK_BRAND_LEAD` ±15px）。
+  `tests/test_cover_spec.py` → **18/18 PASS**。
+- **代价**：署名整体比第三轮下移 87px，在罗斯那条落到球衣 `BULLS` 字上（黄字黑边仍可读）。
+  压脸仍是 5 条（罗斯 / SHAQ / 莫兰特 / 约基奇 / 马布里），**集合与第三轮完全相同，未新增**。
+- 回退：`nba.yaml` 的 `drop_rows` 去掉 `tag`、`STACK_BRAND_LEAD` 改回按行高算的 1.15；
+  备份为 `work/cover.bak-tagdrop-<ts>.jpg` + `work/cover-plan.bak-tagdrop-<ts>.json`。
+
+**第五轮（同日，用户贴竞品缩略图墙：「logo 怎么往上提了呢，还是要标题在上，logo 在下呢」）**：
+
+- **单块贴顶也被否了** —— 第四轮把三行合成一块贴安全带顶部，署名自然跟着标题一起跑到上面
+  （用户原话「logo 怎么往上提了呢」）。用户给的参考图是**平台原生缩略图**：标题压着 1:1 窗口
+  的**顶**、`Hoop Dynasty Daily` 压着**底**。所以正确解法不是再挪那一块，而是**把它拆成两段**。
+- **新锚定 `stack_anchor: split`**（`cover_engine`）：
+  - **文案行**（headline / stat / tagline）贴安全带**顶**：`rows_y = s_top + stack_inset`；
+  - **署名**单独钉在安全带**底**：`y = s_bot - stack_inset - 行高`（在绘制循环里绝对定位，
+    不再走 `gap_after`，因此 `STACK_BRAND_LEAD` 对 split **完全不起作用**）；
+  - 两侧边距都取 `stack_bottom_inset_pct`（=0.075 → **80px**），**上下对称**。
+- 另外三处必须一起改，否则 split 会「看着对、实际是错的」：
+  - `row_bottom()`：报给 QA / 报告的 `composition.bottom` 不能再按「rows_y 顺序累加」算
+    （那样报 1025），要按署名**真实墨迹底** `s_bot - stack_inset` 报（1417），否则
+    `safe_ok` / `cover=pass` 判错。
+  - scrim（画面遮黑）：单块时要把整条安全带压暗；split 时文案在两头，只压**文案所占的条带**
+    （`rows_y + content_h`），否则整幅画面白压一层灰。
+  - `band` 画面模式也要把 `rows_y` 重锚一次（split 与画面模式无关，文案永远在顶上）。
+- **实测**：`composition 502-1417`；文案块顶 502，八条单行数据行到 793、两条双行到 911；
+  署名墨迹 1361-1417（距 1:1 窗口下沿 80px）；1:1 窗口垂直中心 959 附近**无任何文字**。
+- **QA**：`cover_qa_sync.py` → **5 PASS / 5 WARNING**，warning 集合与第三、四轮**完全相同**
+  （罗斯 / SHAQ / 莫兰特 / 约基奇 / 马布里，全部只由 `face_occ=True`）。
+- **测试**：`test_stack_layout_is_one_bottom_block` 改名 `test_stack_layout_keeps_the_copy_together`，
+  改成**锚定感知**：文案行之间仍守 `0.09×safe_h` 上限；`->logo` 一段在 split 下跳过上限，
+  改判「文案顶距带上沿 = inset（±20px）」+「署名墨迹底距带下沿 = inset（±20px）」；
+  非 split 才校验 `STACK_BRAND_LEAD`。→ **18/18 PASS**。
+- 回退：`nba.yaml` 的 `stack_anchor` 改回 `top`（单块贴顶）/`center`/`bottom`；
+  备份为 `work/cover.bak-split-<ts>.jpg` + `work/cover-plan.bak-split-<ts>.json`。
+
 
 画面处理 —— **不要锐化**：
 
@@ -992,6 +1396,40 @@ nba 的 `["Anton","Impact","Arial Black","sans-serif"]` 实测落到 **Impact**�
   人脸占比 7.2%、clutter 0.017，而远景帧普遍 clutter 0.10+。
 - ⚠️ **分数只用来筛候选**（本例最高分的 s_0037 其实是 McKie 的背影），
   **最终必须目视确认主体是谁**，别只看分数。
+
+##### 8.5.1 视频里找不到可用帧 → 改用平台封面图（2026-10-15 定案）
+
+用户明确授权：「如果视频里面找不着合适的帧来做封面，就用我下载好封面图片来做封面」。
+
+**「找不到」不再靠感觉，是可量化的。** 单块版式（§8.4）把文字块钉在安全带底部，
+文字块并集实测占画布 `x182–898 / y657–1423`（1080×1920）。画面带只有 `y422–1497`，
+所以能给「主体级人脸」腾出的净区只剩三块：
+
+| 净区 | 画布坐标 | 可用厚度 |
+|---|---|---|
+| 文字块上方 | `y422–657` | 235px |
+| 左侧 | `x0–182` | 182px |
+| 右侧 | `x898–1080` | 182px |
+
+再加上 **画面一律 cover-拟合、没有平移余量**（源比画布高就纵向零余量、
+源比画布宽就横向零余量，见 §8.4），结论很清楚：
+
+> 只要源片里所有够大的脸都落在画面中部，就**任何一帧都救不回来**——
+> 既不能平移，也不能靠换帧，只能换图。
+
+- **量法**：逐候选帧把 `faces` 经 `picture_src` 映射到画布，与文字块并集求交，
+  全程为 True 才算「无可用帧」。科比的源片 328 帧里 16 帧检出脸，
+  15 帧重叠，唯一不重叠的是右侧一张 155px 小脸（面积 2.1%，低于 4.5% 主体门槛）→ 判定无可用帧。
+- **换图通路**（本批建的批处理工具，不在 skill 内）：
+  `platform_cover.py` 把用户下载的 `<标题>_xWT111.jpg` 做成 1080×1920 合成「帧」
+  （`BAND_Y=422 / BAND_H=1075`，整图缩放后 `GaussianBlur(46)+×0.42` 当背景，
+  画面带用 `UnsharpMask(2,110,3)`），先用 RapidOCR 找中文区、裁出最大无中文正方区，
+  再交给同一个 `generate_cover.py --profile nba` 走常规排版。
+  ⚠️ 合成帧的 plan 里 `profile` 必须写成 `nba`，否则会套 generic（字号 100 / Arial Black /
+  `layout: safe`），**和其余封面风格不一致**——本批踩过这个坑。
+- **选了平台封面就要留痕**：写进 `<work>/cover-source.json`
+  （`source: platform_poster` + `why`），并把原视频帧版 plan 备份成
+  `cover-plan-videoframe.json`，方便回溯。
 
 #### 8.6 封面帧清理（禁止中文/水印带入封面）
 
@@ -1029,6 +1467,24 @@ nba 的 `["Anton","Impact","Arial Black","sans-serif"]` 实测落到 **Impact**�
    做重叠检测。⚠️ **禁止用整个安全区做判定**（会导致人脸在安全区内但文字没压到也误报）。
    人脸坐标由 `generate_cover.py` 用 `picture_src` 映射到画布坐标系，
    不在可见画面带里的人脸会被丢弃。
+
+   ⚠️⚠️ **该项只是下界，不能当作「脸一定没被压」的证明**（2026-10-15 实锤）。
+   `generate_cover.detect_faces()` 是 Haar 正脸级联，**会漏检暗部 / 大角度侧脸**：
+   科比那条（源 728×720，脸约 254px，暗、侧、带运动模糊）全尺寸跑出 0 张脸，
+   于是 `face_occluded=False` —— 而放大一看，`2003 PLAYOFF` 的「2」正压在下巴上。
+   这是**最危险的一类错（假 PASS）**。现在的实现：
+
+   * 第 1 遍：全尺寸正脸级联（**保持历史行为不变**，不要动）；
+   * 第 2 遍（**仅当第 1 遍一张脸都没有时**才跑）：半尺寸重跑。降采样相当于低通滤波，
+     `minSize` 相对脸变大，科比那张脸就是这样捞回来的。半尺寸下同一个级联开始把
+     **人的躯干**当脸（在这批 10 张上量到误框可达短边的 24%），所以第 2 遍
+     只接受 ≥ 短边 30% 的「主体级」大脸（科比 35%）。没有这道门槛，
+     这次改动会把 10 张里的 8 张误报成「文字压脸」。
+   * **侧脸级联（`haarcascade_profileface.xml`）不要用**：实测在这批画面上
+     每帧报 5–8 个「脸」，逐个看全是躯干。
+   * **交付前必须目检渲染出来的封面**（把封面裁出画面带放大看文字块周边），
+     自动化只作提示。选帧器再稳，也拦不住检测器看不见的情况 ——
+     换帧/换图是唯一出路，例如 §8.5 之后的「无可用帧就改用平台封面」。
 5. 封面帧已按 localization-plan 清理（`frame_cleaned_regions` ≥ `frame_clean_expected`）。
    ⚠️ `frame_clean_expected` = **该帧(selected_frame.timestamp_sec)在屏的项数**，
    不是全片项数 —— 用全片项数当分母会逼着 cover 去擦不存在的区域（见 §8.6）。
@@ -1247,6 +1703,54 @@ CML 唯一合规的用法是：**视频不带 BGM 上传，在 TikTok 发布流�
 （该许可只覆盖 YouTube 站内），脚本会拦下并出「授权不可用」警告。
 ⚠️ NCS 曲目已被 TikTok 识别库收录，禁用（§12.4 第 8 条）。
 
+#### 10.1 被平台判「音乐有版权」时的处理（2026-10-16 实战）
+
+**第一步不是猜，是看 `audio-plan.json` 的 strategy**：
+
+| strategy | 成品里的音乐 | 判版权时换 BGM 有用吗 |
+|---|---|---|
+| `remove_original_bgm_only` | **只有**我们的 BGM，原片音频一点没留 | ✅ **一定有用** —— 被判的就只可能是我们这首 |
+| `duck_original_add_bgm` | 原声压 −15dB **仍在**，上面叠 BGM | ❌ 没用。原 BGM 只是变小，指纹照样命中（§3「音量压低 ≠ 版权解除」） |
+
+⚠️ **CC BY ≠ 不会被索赔**。incompetech 的曲子**全部受版权保护** —— 站方 FAQ 原话
+"Is this music Copyright Free? **No.** All of this music is copyrighted."
+CC BY 只是授权你使用，而平台侧是**音频指纹**自动比对第三方数据库：别人把同一首
+登记成自己的，就会给你来一发**误判**。incompetech 给每首曲子的 **ISRC 正是用来反证的**
+（FAQ：有人质疑你时，用 ISRC 证明曲目来源）。所以索赔**不等于违规**，
+有授权凭证 + 署名就能申诉；但为了省事，换曲通常比申诉快。
+
+**换曲的固定动作（顺序不能乱，尤其第 ⑤ 步）**：
+
+```bash
+# ① 按视频 BPM 上网搜候选 → 逐个查本地库
+bgm_ledger.py resolve --bpm <rhythm.bpm_mid> --candidate "曲名::作者" ...
+# ② 本地没有 → 下载 → 入册（自动实测 BPM）
+bgm_ledger.py add --audio <下载的文件> --name "..." --artist "Kevin MacLeod" \
+    --source Incompetech --license "CC BY 4.0" --category high_energy ...
+# ③ 重算节奏对齐（drop 落到 video 高潮）
+analyze_bgm.py --bgm <新曲> --work-dir <work>
+# ④ 改 audio-plan.json 的 bgm.asset_path —— 注意该文件里的 loudness_normalized 才会生效
+audio_processor.py mix --video <无音轨中间件> --work-dir <work> --output-dir <out>
+# ⑤ 重出发布文案：署名行是从 audio-plan 反查曲库生成的，**不重出就会写错成旧曲**
+generate_post.py --work-dir <work> --output-dir <out> --profile nba
+# ⑥ 台账记一笔（下次才不会重复用这首）
+bgm_ledger.py record --track "<新曲文件>" --output-dir <out>
+```
+
+**选新曲的两个额外判据**（2026-10-16 换 Metalmania 时总结）：
+
+1. **优先热门度低的深库曲**。越热门的曲子被第三方错误登记的越多
+   （incompetech 全站 1400+ 首，`https://incompetech.com/music/royalty-free/pieces.json`
+   是官方全量清单，带 bpm / length / feel / isrc，选曲时直接查它，
+   别只在本地的 24 首里打转）。
+2. **优先让实测 BPM 贴近 `rhythm.bpm_mid`** —— `atempo≈1.0` 既省掉变速失真，
+   也少一次指纹变形带来的音质代价。实战对照：
+
+   | | BPM | 与视频 135.9 的差 | atempo | 对齐 |
+   |---|---|---|---|---|
+   | Metalmania（被判版权） | 152.0 | **+11.9%**（超 ±6% 容差，只能硬拉） | 1.0000 | `as_is` 无对齐 |
+   | Harmful or Fatal（替换） | 136.0 | **+0.07%** | **0.9993** | drop 落在 49.00s 高潮 |
+
 ### 11. 原创化处理（突破 TikTok 非原创判定）
 
 **问题**：搬运视频上传 TikTok 后收到"内容可能受限 - 非原创内容、劣质内容和二维码内容"警告，算法匹配到原视频导致流量受限。
@@ -1259,7 +1763,7 @@ CML 唯一合规的用法是：**视频不带 BGM 上传，在 TikTok 发布流�
 | 2 | 正方形转竖版 | 720x720 → 720x1280，模糊背景填充 | `--to-vertical` |
 | 3 | Ken Burns 缓慢放大 | 1.0→1.08，破坏画面指纹 | `--zoom 1.08` |
 | 4 | 精彩瞬间慢动作 | 0.6x，增加戏剧效果 | `--slowmo "44-46:0.6"` |
-| 5 | 开头标题卡 | 1.5秒，视频帧模糊+暗化做背景 | `--title "TITLE"` |
+| 5 | **正片直入（无片头卡）** | 第 0 帧必须就是比赛/正片画面，不许放标题卡、logo 卡、封面复刻帧 | 默认行为，无需参数 |
 | 6 | 动态英文字幕 | 精彩瞬间弹出，淡入淡出 | `--dynamic-text "46-51:THE GOAT!"` |
 | 7 | 重新编码 | libx264 crf20，改变元数据 | 自动 |
 | 8 | 替换 BGM | 音频也做改编，非原始音频 | `--bgm bgm.mp3` |
@@ -1267,42 +1771,37 @@ CML 唯一合规的用法是：**视频不带 BGM 上传，在 TikTok 发布流�
 **工具**：`scripts/originalize_video.py`
 
 ```bash
-# 基础原创化（裁剪+缩放+标题卡+换BGM）
+# 标准原创化（裁剪 + 缩放 + 慢动作 + 换 BGM，正片直入）
 python originalize_video.py --video input.mp4 --output final.mp4 \
-  --title "BUZZER BEATER" --subtitle "AT THE BUZZER" --bgm bgm.mp3
+  --slowmo "44-46:0.6" --dynamic-text "46-51:THE GOAT!" --bgm bgm.mp3
 
-# 完整原创化（含慢动作+动态字幕+转竖版）
+# 转竖版 + 动态字幕（同样不加片头卡）
 python originalize_video.py --video input.mp4 --output final.mp4 \
-  --to-vertical --title "JORDAN vs LEBRON" --subtitle "GOAT DEBATE" \
-  --slowmo "44-46:0.6" --dynamic-text "46-51:THE GOAT!" \
+  --to-vertical --slowmo "44-46:0.6" --dynamic-text "46-51:THE GOAT!" \
   --bgm bgm.mp3 --work-dir work
 ```
 
-### 11.1 标题卡规范（禁用纯黑背景）
+### 11.1 片头卡：默认禁止（首帧必须是正片画面）
 
-**⚠️ 关键规则：标题卡背景必须用视频帧模糊+暗化，禁止纯黑色背景！**
+**⚠️ 硬规则（2026-10-25 定稿）：成片第 0 帧必须是正片内容，不再插入任何标题卡 / logo 卡 / 封面复刻帧。**
 
-**问题**：纯黑色背景标题卡跟视频内容太不搭，突兀割裂。
+**为什么废止**（用户原话："封面已经加了视频的内容和我的 logo，不要再在头帧再加 logo 或者视频内容这一帧，有点冗余了，直接就进入视频正题"）：
 
-**解决方案（视频帧模糊背景法）**：
-1. 提取视频第一帧作为背景
-2. 高斯模糊 `boxblur=15:2`（不能太模糊，要能看出是比赛画面）
-3. 轻微暗化 `eq=brightness=-0.15:contrast=0.9`（**暗化程度不能超过 -0.2，否则看起来像黑色**）
-4. 叠加亮黄色粗体文字 + 黑色粗描边
-5. 0.5秒淡入效果
+| 问题 | 后果 |
+|---|---|
+| 封面 `cover.jpg` 已承载标题 + 内容简介 + 品牌 logo | 视频开头再放一张同样的卡 = 同一条信息说两遍 |
+| 前 1.5 秒是静止画面 | 完播率/前 3 秒留存被直接吃掉，TikTok 主要靠前 3 秒判断是否推荐 |
+| 首帧与封面高度相似 | "封面 vs 首帧" 看起来像同图复用，对原创判定没有加分，只有风险 |
+| 时长凭空 +1.5s | 字幕时间轴要整体平移，多一处出错点 |
 
-**标题卡参数规范**（已固化在 `originalize_video.py` 中）：
-- 模糊：`boxblur=15:2`
-- 暗化：`brightness=-0.15`（**禁止 ≤ -0.3，会看起来像纯黑**）
-- 对比度：`contrast=0.9`
-- 时长：1.5秒
-- 主标题字号：96px，亮黄色 `yellow`，Arial Black
-- 副标题字号：40px，白色 `white`
-- 淡入：0.5秒
+**正确做法**：
+- 标题、球员名、数据、栏目号 → 全部只放在 `cover.jpg` 里。
+- 视频画面层的信息（栏目条、品牌角标、少量说明文字）**叠在正片画面上**，第 1 秒淡入上浮，不占用时长。
+- `originalize_video.py` 已把 `--title/--subtitle` 降级为 LEGACY：默认不生成，传了也只会打 WARNING 忽略；确需时才加 `--title-card` 显式开启。
 
-**为什么用视频帧模糊背景**：跟视频内容一脉相承，观众一眼就知道这是这个视频的标题卡，而不是突兀的黑色幻灯片。模糊+轻微暗化既能让文字清晰可读，又能保留视频的氛围和色彩。
+**[LEGACY] 若用户明确要求加标题卡**，历史规范仍然有效：背景用视频帧模糊 `boxblur=15:2` + 轻暗化 `brightness=-0.15`（**禁止 ≤ -0.3，会看起来像纯黑**）+ `contrast=0.9`，亮黄色 Arial Black 粗体 + 黑描边，0.5s 淡入。
 
-**Agent 介入点**（jobs/*.job.md 中标注 `[AGENT]`）：视频理解、分类、翻译、tts_adjust、cover 文案、post 文案、review 报告、QA 裁决、原创化参数（标题卡文字、慢动作时间点、动态字幕文字）。
+**Agent 介入点**（jobs/*.job.md 中标注 `[AGENT]`）：视频理解、分类、翻译、tts_adjust、cover 文案、post 文案、review 报告、QA 裁决、原创化参数（慢动作时间点、动态字幕文字）。**注意：标题卡文字不再是 Agent 介入项 —— 不再产生片头卡。**
 
 ## 数据契约（核心 JSON）
 
@@ -1316,7 +1815,7 @@ python originalize_video.py --video input.mp4 --output final.mp4 \
 - **`timeline.json`** — TTS 对齐后的最终时间轴（字幕与混音的唯一时间基准）
 - **`audio-plan.json`** — 音频处理方案（strategy/tts/bgm）
 - **`cover-plan.json`** — 封面方案（选帧/主体/安全区/文案/渲染参数）
-- **`qa.json`** — 质量检查结果（PASS/WARNING/FAIL + 五类检查 + 降级汇总 + review项）
+- **`qa.json`** — 质量检查结果（PASS/WARNING/FAIL + 六类检查 + `opening_frame` 首帧门禁 + 降级汇总 + review项）
 
 详见 `docs/architecture.md`。
 
@@ -2800,6 +3299,11 @@ PSNR/SSIM 对**整块平滑填充**不敏感（A 的 SSIM 有 0.967，看着"合
    ⚠️ 注意：ASR 只能识别语音，**识别不到音乐** —— 所以 `audio_strategy=keep_original` 不代表音频干净，`total_segments=1 (noise only)` 也不代表没有音乐。
 2. **画面**：画面与平台上已有内容高度雷同（同一素材被反复搬运），或含第三方商标/版权画面（球队 logo、转播画面等）。
 
+> ⚠️ **返修时不要走"开头贴一张封面卡"这条路**（2026-10-25 用户明确否掉）：
+> 封面已含标题与品牌，首帧再贴一遍是重复信息，还会吃掉前 3 秒留存。
+> 正确方向见 §11.1（首帧即正片）与 §11 的其余要素（裁剪/变速/慢镜/换 BGM/重调色）。
+> 只做"加片头卡"的返修，画面主体一个像素没动，平台侧依旧判重 —— 06、08、罗伊三条都因此二次被打回。
+
 ### 16.1 标准处理：换音频 + 原创化
 
 用 `scripts/originalize_video.py` 一条命令完成：
@@ -2808,14 +3312,14 @@ PSNR/SSIM 对**整块平滑填充**不敏感（A 的 SSIM 有 0.967，看着"合
 python scripts/originalize_video.py \
   --video <旧 final.mp4> --output <新 final.mp4> --work-dir <work> \
   --no-crop --zoom 1.08 \
-  --title "SHAQ vs LEBRON" --subtitle "SUMMER CAMP DANCE OFF" \
   --dynamic-text "11-15:WHO WON THIS DANCE-OFF?" \
   --bgm "music/sports/Wallpaper.mp3"
 ```
 
 - `--bgm` 是**整体替换**原声（不是叠加）。曲库见 `music/sports/`（Kevin MacLeod，CC BY 3.0，可商用）；斗舞/搞笑类选 `Wallpaper`、`Cipher`、`Crunk Knight`。
 - 方形或非常规画幅加 `--no-crop`，避免裁掉画面内容。
-- 输出会**加长约 1.4s**（标题卡），记得同步平移 `subtitles-en.srt` 的时间轴。
+- ⚠️ **不要加 `--title/--subtitle`**：片头卡已默认停用（§11.1），第 0 帧必须是正片画面。标题写进 `cover.jpg` 与 `tiktok-post.md`。
+- 因为不再插片头卡，**成片时长与源一致**（慢动作会改变时长，但字幕轴按 timeline 走，无需为 1.5s 额外平移）。
 - `--dynamic-text` 目前**只接受一个 spec**，要多条动态字幕需分次处理（会多一次编码）。
 
 ### 16.2 处理完仍受限时的升级手段
@@ -2829,7 +3333,9 @@ python scripts/originalize_video.py \
 | 变速（0.95x / 1.05x） | 中 | 观感变化 |
 | **水平镜像 hflip** | **最强**：直接破坏画面指纹匹配 | 画面内文字会左右反向 |
 
-### 16.3 字号必须按画面宽度自适应（已修）
+### 16.3 字号必须按画面宽度自适应（已修，LEGACY 条款）
+
+> 本节只对 `--title-card`（LEGACY）与动态字幕生效。片头卡默认不再生成。
 
 `TITLE_CARD_FONT_SIZE=96`、动态字幕 `72` 原来写死在代码里，**方形画幅 720x720 下 "SHAQ vs LEBRON" 会横向溢出被裁掉**。现已统一走 `fit_font_size()`（Arial Black 大写≈0.62em，按最长行折算上限），title / subtitle / dynamic 三处都生效。
 
@@ -2837,6 +3343,7 @@ python scripts/originalize_video.py \
 
 ### 16.4 交付前自查
 
-- 标题卡与动态字幕**四边都不贴边**（抽 0.7s / 中途 / 结尾三帧看）。
+- **第 0 帧必须是正片画面**：显式抽 `t=0` 的帧，确认不是标题卡 / logo 卡 / 封面复刻帧（`-frames:v 1` 或 `select='eq(n\,0)'`，1fps 采样网格不含 t=0）。
+- 动态字幕**四边都不贴边**（抽 0.7s / 中途 / 结尾三帧看）。
 - `ffprobe` 确认音频确实换了（码率/时长与源不同）。
 - 保留旧版备份，并在 `tiktok-post.md` 第 8 节写清改了什么，方便回溯与二次评估。

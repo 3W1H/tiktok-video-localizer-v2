@@ -43,7 +43,7 @@
     {
       "file": "music/sports/Crunk Knight.mp3",
       "bpm_measured": 83.4,
-      "bpm_declared": null,
+      "bpm_declared": 104.0,
       "confidence": 0.6,
       "duration_sec": 232.0,
       "category": null,
@@ -275,15 +275,6 @@
       "is_variant": false
     },
     {
-      "file": "music/sports/Volatile Reaction.mp3",
-      "bpm_measured": 152.0,
-      "bpm_declared": null,
-      "confidence": 0.61,
-      "duration_sec": 165.4,
-      "category": null,
-      "is_variant": false
-    },
-    {
       "file": "music/sports/Volatile Reaction_variant.mp3",
       "bpm_measured": 161.5,
       "bpm_declared": null,
@@ -308,6 +299,42 @@
       "confidence": 0.48,
       "duration_sec": 217.6,
       "category": null,
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Harmful or Fatal.mp3",
+      "bpm_measured": 136.0,
+      "bpm_declared": null,
+      "confidence": 0.842,
+      "duration_sec": 330.736,
+      "category": "high_energy",
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Volatile Reaction.mp3",
+      "bpm_measured": 152.0,
+      "bpm_declared": null,
+      "confidence": 0.613,
+      "duration_sec": 165.355,
+      "category": "high_energy",
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Malicious.mp3",
+      "bpm_measured": 143.6,
+      "bpm_declared": null,
+      "confidence": 0.548,
+      "duration_sec": 222.929,
+      "category": "high_energy",
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Nightmare Machine.mp3",
+      "bpm_measured": 143.6,
+      "bpm_declared": null,
+      "confidence": 0.516,
+      "duration_sec": 226.456,
+      "category": "high_energy",
       "is_variant": false
     }
   ]

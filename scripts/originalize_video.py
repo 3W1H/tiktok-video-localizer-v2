@@ -4,21 +4,22 @@ originalize_video.py - 视频原创化处理脚本
 
 用于突破 TikTok "非原创内容" 判定，通过多项创意改编让算法判定为原创。
 
-原创化处理 8 要素：
+原创化处理要素：
   1. 画面边缘裁剪 8%（改变构图，去边缘水印）
   2. 正方形转竖版（720x720 → 720x1280，模糊背景填充）
   3. Ken Burns 缓慢放大（1.0 → 1.08，破坏画面指纹）
   4. 精彩瞬间慢动作 0.6x（增加戏剧效果）
-  5. 开头 1.5 秒标题卡（视频帧模糊+暗化做背景，禁用纯黑背景）
-  6. 精彩瞬间动态英文字幕（淡入淡出）
-  7. 重新编码（libx264 crf20，改变元数据）
-  8. 替换 BGM（音频也做改编）
+  5. 动态英文字幕（淡入淡出，在精彩瞬间弹出）
+  6. 重新编码（libx264 crf20，改变元数据）
+  7. 替换 BGM（音频也做改编）
 
-关键规范：
-  - 标题卡背景必须用视频帧模糊+暗化，禁止纯黑色背景
-  - 标题卡暗化程度 brightness=-0.15（不能太高，否则看起来像黑色）
-  - 标题卡模糊程度 boxblur=15:2
-  - 标题卡文字：亮黄色 RGB(255,220,0) + Arial Black 粗体 + 黑色粗描边
+⚠️ 片头标题卡已默认停用（2026-10-25）：
+  封面 cover.jpg 已经承载了标题、内容简介和品牌 logo，视频第 0 帧再放一张
+  同样内容的标题卡属于重复信息，白占 1.5 秒、拉低完播率，而且会让
+  "封面 vs 首帧" 看起来像同一张图被塞了两遍。
+  **成片第 0 帧必须是正片画面**，打开即进入主题。
+  标题卡能力保留在 `--title-card` 后面（默认关闭），只在用户明确要求时启用；
+  启用时仍遵守"禁止纯黑背景"的历史规范（视频帧模糊 + 轻暗化）。
 """
 
 import argparse
@@ -36,7 +37,8 @@ from common import (
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# 标题卡规范（关键优化点，禁止纯黑背景）
+# 标题卡规范（LEGACY —— 默认不生成，仅 --title-card 时启用）
+# 停用原因：封面已承载标题与品牌，首帧再放标题卡是重复信息（见模块 docstring）
 TITLE_CARD_BRIGHTNESS = -0.15  # 暗化程度，不能太高（-0.35 会看起来像黑色）
 TITLE_CARD_CONTRAST = 0.9
 TITLE_CARD_BLUR = "15:2"  # 模糊程度
@@ -231,13 +233,16 @@ def step_slow_motion(video: str, output: str, work_dir: str,
         seg3 = None
 
     # 拼接
+    # ⚠️ concat demuxer 里的相对路径是「相对于 concat 文件所在目录」解析的，
+    # 若 work_dir 本身是相对路径（如 --work-dir work），写进去会变成 work/work/xx.mp4。
+    # 统一写绝对路径。
     concat_list = os.path.join(work_dir, "slowmo_concat.txt")
     with open(concat_list, "w") as f:
         if seg1 and os.path.exists(seg1):
-            f.write(f"file '{seg1}'\n")
-        f.write(f"file '{seg2}'\n")
+            f.write(f"file '{os.path.abspath(seg1)}'\n")
+        f.write(f"file '{os.path.abspath(seg2)}'\n")
         if seg3 and os.path.exists(seg3):
-            f.write(f"file '{seg3}'\n")
+            f.write(f"file '{os.path.abspath(seg3)}'\n")
 
     run_cmd([
         "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_list,
@@ -249,9 +254,13 @@ def step_slow_motion(video: str, output: str, work_dir: str,
 
 def step_title_card(video: str, output: str, work_dir: str,
                     title: str, subtitle: Optional[str]) -> str:
-    """步骤4：开头标题卡（视频帧模糊+暗化做背景，禁用纯黑背景）"""
+    """步骤4（LEGACY，默认不执行）：开头标题卡
+
+    默认关闭：封面已承载标题/简介/品牌，首帧再放一张同样的卡属于重复信息。
+    仅当显式传 `--title-card` 时才走本函数，且仍禁用纯黑背景。
+    """
     log.info("=" * 60)
-    log.info("Step 4: Opening title card (blurred video frame background)")
+    log.info("Step 4: Opening title card (LEGACY, explicit --title-card only)")
     log.info("=" * 60)
 
     if not title:
@@ -319,10 +328,11 @@ def step_title_card(video: str, output: str, work_dir: str,
     ], f"Generate title card (blurred bg, brightness={TITLE_CARD_BRIGHTNESS})")
 
     # 拼接标题卡 + 主视频
+    # 同 step_slow_motion：concat 列表必须写绝对路径（见该函数注释）
     concat_list = os.path.join(work_dir, "title_concat.txt")
     with open(concat_list, "w") as f:
-        f.write(f"file '{title_card}'\n")
-        f.write(f"file '{video}'\n")
+        f.write(f"file '{os.path.abspath(title_card)}'\n")
+        f.write(f"file '{os.path.abspath(video)}'\n")
 
     run_cmd([
         "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_list,
@@ -440,19 +450,18 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例：
-  # 基础原创化（裁剪+缩放+标题卡+换BGM）
+  # 默认：正片直入，不加任何片头卡（推荐）
   python originalize_video.py --video input.mp4 --output final.mp4 \\
-    --title "BUZZER BEATER" --subtitle "AT THE BUZZER" --bgm bgm.mp3
-
-  # 完整原创化（含慢动作+动态字幕）
-  python originalize_video.py --video input.mp4 --output final.mp4 \\
-    --title "JORDAN vs LEBRON" --subtitle "GOAT DEBATE" \\
-    --slowmo "44-46:0.6" --dynamic-text "46-51:THE GOAT!" \\
+    --zoom 1.08 --slowmo "44-46:0.6" --dynamic-text "46-51:THE GOAT!" \\
     --bgm bgm.mp3
 
+  [LEGACY] 确需片头标题卡时才显式开启（默认关闭）
+  python originalize_video.py --video input.mp4 --output final.mp4 \\
+    --title-card --title "BUZZER BEATER" --subtitle "AT THE BUZZER"
+
 关键规范：
-  - 标题卡背景用视频帧模糊+暗化（brightness=-0.15），禁止纯黑背景
-  - 标题卡文字：亮黄色 + Arial Black 粗体
+  - ⚠️ 成片第 0 帧必须是正片画面：封面已有标题/简介/logo，片头再来一张卡是重复信息
+  - [LEGACY] 若显式启用标题卡：背景用视频帧模糊+暗化（brightness=-0.15），禁止纯黑背景
   - 慢动作 -t 参数必须放在 -i 前面
   - ⚠️ 边缘裁剪可能影响英文记分牌/比分牌，如记分牌在边缘请用 --no-crop 跳过裁剪
   - ⚠️ 只有中文区域才需要遮罩/inpaint处理，英文记分牌不需要处理
@@ -470,8 +479,11 @@ def main():
     ap.add_argument("--zoom", type=float, default=DEFAULT_ZOOM_MAX,
                     help=f"Ken Burns 最大放大倍数（默认 {DEFAULT_ZOOM_MAX}）")
     ap.add_argument("--slowmo", help="慢动作：start-end:speed，如 '44-46:0.6'")
-    ap.add_argument("--title", help="标题卡主标题（支持 \\n 换行）")
-    ap.add_argument("--subtitle", help="标题卡副标题")
+    ap.add_argument("--title-card", action="store_true",
+                    help="[LEGACY] 生成片头标题卡。默认关闭：封面已含标题/品牌，"
+                         "首帧必须是正片画面。仅在用户明确要求时开启。")
+    ap.add_argument("--title", help="[LEGACY] 标题卡主标题（需同时传 --title-card）")
+    ap.add_argument("--subtitle", help="[LEGACY] 标题卡副标题（需同时传 --title-card）")
     ap.add_argument("--dynamic-text", help="动态字幕：start-end:text，如 '46-51:THE GOAT!'")
     ap.add_argument("--bgm", help="BGM 文件路径（替换原音频）")
     ap.add_argument("--skip-steps", nargs="*", default=[],
@@ -486,7 +498,13 @@ def main():
     log.info("=" * 60)
     log.info(f"  Input: {args.video}")
     log.info(f"  Output: {args.output}")
-    log.info(f"  Title: {args.title or '(none)'}")
+    if args.title_card and args.title:
+        log.info(f"  Title card: ENABLED (LEGACY) — {args.title!r}")
+    else:
+        log.info("  Title card: disabled (default) — 第 0 帧直接是正片画面")
+        if args.title or args.subtitle:
+            log.warning("  ⚠️ 收到 --title/--subtitle 但未加 --title-card，已忽略。"
+                        "标题请写进 cover.jpg 与 tiktok-post.md，不要放在片头。")
     log.info(f"  Slowmo: {args.slowmo or '(none)'}")
     log.info(f"  Dynamic text: {args.dynamic_text or '(none)'}")
     log.info(f"  BGM: {args.bgm or '(none)'}")
@@ -535,11 +553,13 @@ def main():
         slowmo_spec = parse_slowmo_spec(args.slowmo)
         current = step_slow_motion(current, out, args.work_dir, slowmo_spec)
 
-    # 步骤4：标题卡
-    if "title" not in args.skip_steps:
+    # 步骤4：标题卡（LEGACY，默认关闭 —— 首帧必须是正片画面）
+    if args.title_card and args.title and "title" not in args.skip_steps:
         step_num += 1
         out = os.path.join(args.work_dir, f"step{step_num}_title.mp4")
         current = step_title_card(current, out, args.work_dir, args.title, args.subtitle)
+    else:
+        log.info("⏭ Skipping opening title card (default) — 成片直接进入正片")
 
     # 步骤5：动态字幕
     if "subtitle" not in args.skip_steps:
@@ -577,19 +597,29 @@ def main():
 
     # 保存结果
     # duration_sec 供 qa_video.check_video 作为时长基准：
-    # 原创化（标题卡/变速/BGM）会改变总时长，若 QA 仍拿 probe.json 里的
+    # 原创化（慢动作/变速/BGM）会改变总时长，若 QA 仍拿 probe.json 里的
     # 源时长比对，会误报 "Duration: expected=14.5s, actual=16.0s" 之类的 FAIL。
+    steps_done = ["ken_burns_zoom", "bgm_replacement"]
+    if "crop" not in args.skip_steps and not args.no_crop:
+        steps_done.insert(0, "edge_crop")
+    if "slowmo" not in args.skip_steps and args.slowmo:
+        steps_done.insert(-1, "slow_motion")
+    if "subtitle" not in args.skip_steps and args.dynamic_text:
+        steps_done.insert(-1, "dynamic_subtitle")
+    if args.title_card and args.title and "title" not in args.skip_steps:
+        steps_done.insert(0, "title_card")
+
     result = make_result(
         status="ok",
         confidence=0.9,
         output_path=args.output,
         duration_sec=round(final_duration, 3),
-        originalization_steps=[
-            "edge_crop", "ken_burns_zoom", "slow_motion",
-            "title_card", "dynamic_subtitle", "bgm_replacement",
-        ],
-        title_card_style="blurred_video_frame_background (NOT black)",
+        originalization_steps=steps_done,
+        # 默认 False：首帧即正片画面，封面负责标题与品牌
+        opening_title_card=bool(args.title_card and args.title),
     )
+    if result.get("opening_title_card"):
+        result["title_card_style"] = "blurred_video_frame_background (NOT black)"
     save_json(os.path.join(args.work_dir, "originalize-result.json"), result)
 
 

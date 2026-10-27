@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import os
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace as dc_replace
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -43,7 +43,36 @@ from common import resolve_font_chain  # noqa: E402
 W, H = 1080, 1920
 LINE_H = 1.06           # line box as a multiple of the font size
 ROW_GAP = 0.16          # gap between stacked bottom rows, x row height
+BRAND_LEAD = 0.60       # extra lead ABOVE the brand row, x the row above it.
+# The brand mark is a signature, not the tagline's third line. With the flat
+# ROW_GAP (0.16) the gap above it measured ~0px of real ink and the two rows
+# merged into one blob (2026-10-15, user: 「下方的 logo 和文字混在一起」).
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff")
+
+# --- stack layout (2026-10-15) -------------------------------------------
+# ``layout: stack`` puts headline / sub / stat / tagline / brand into ONE
+# bottom-anchored block instead of an upper and a lower group. The block needs
+# its own, roomier rhythm: with the flat ROW_GAP the two 127px rows and the
+# brand all but touch, and the rows read as a pile.
+STACK_ROW_GAP = 0.24        # gap inside the block, x the row's own height
+# Lead above the brand row, as a fraction of the SAFE BAND height (1075px ->
+# ~188px). 0.80 x the tagline height left the brand lockup ~38px under that row,
+# which at 1080px wide reads as "the tagline is sitting on the signature"
+# (2026-10-15, user: 「这跟 logo 挨着」). The brand is a signature, not another
+# content row, so it gets real air.
+# Deliberately NOT a multiple of the row above it any more: that row can wrap to
+# two lines (Wade "193 CM OF PURE VIOLENCE", Rondo "PASSES NOBODY ELSE SEES"),
+# which made the signature drop ~190px extra on those two covers alone. Tying
+# the lead to the band keeps the air identical on all ten (2026-10-15, user:
+# 「小字不能去掉吗？而且不能再和 Logo 之间的间距再大一点吗」).
+# NB: the `split` anchor does not use this at all -- it pins the signature to the
+# band foot instead (see Resolved.stack_anchor).
+STACK_BRAND_LEAD = 0.175
+STACK_GROUP_LEAD = 0.060    # title group -> stat group, x safe band height
+STACK_BOTTOM_INSET = 0.075  # block bottom above s_bot, x safe band height
+# 0.075 * 1075 = ~80px: the brand ink then sits ~83px clear of the 1:1
+# profile-grid edge, instead of the 11px the `safe` layout left it at
+# (2026-10-15, user: 「文字怎么都变成了上下」+ 「下方的 logo 和文字混在一起」).
 
 BLACK_FONT = "/System/Library/Fonts/Supplemental/Arial Black.ttf"
 BOLD_FONT = "/System/Library/Fonts/Supplemental/Arial Bold.ttf"
@@ -58,7 +87,7 @@ GREY = (196, 196, 196)
 BRAND_C1 = (255, 100, 0)      # gradient top    - #FF6400
 BRAND_C2 = (255, 200, 0)      # gradient bottom - #FFC800
 
-LAYOUTS = ("safe", "classic")
+LAYOUTS = ("safe", "stack", "classic")
 PICTURES = ("band", "fill")
 LOGO_STYLES = ("artistic", "sticker", "plain")
 
@@ -205,6 +234,42 @@ def draw_brand_lockup(canvas, text, font_path, size, cy,
     return lw, lh
 
 
+def brand_lockup_box(font_path: str, size: int, text: str, stroke: int = 0):
+    """Geometry of the sticker lockup WITHOUT drawing it.
+
+    Returns ``(layer_w, layer_h, ink_top, ink_bottom)``, ink measured from the
+    LAYER top -- the same origin ``draw_brand_lockup`` uses when it pastes at
+    ``cy - layer_h / 2``.
+
+    ⭐ The layout MUST advance the brand row by its INK height, never by
+    ``block_h(font, text)`` (= ``font.size * 1.06``). Two reasons:
+
+      1. ``draw_brand_lockup`` pads its layer by ``size * 0.55`` on EVERY side
+         to leave room for the outline and the glow, so the layer is far taller
+         than the glyphs (64px Impact -> 127px layer).
+      2. Impact's glyph box is not vertically centred inside that padding:
+         ``getbbox`` returns ``(0, 14, 498, 71)``, so the ink centre sits ~21px
+         ABOVE the layer centre. Centring the *layer* on the row centre shoves
+         the mark up by that much.
+
+    Measured on the 2026-10-15 NBA batch (10/10 covers): the recorded logo
+    region overlapped the tagline by 20px and the real ink gap was ~0px, so
+    "THE FLASH" + "Hoop Dynasty Daily" read as one merged two-line block --
+    user: 「下方的 logo 和文字混在一起」.
+    """
+    stroke = stroke or max(4, int(round(size * 0.13)))
+    f = ImageFont.truetype(font_path, size)
+    tb = f.getbbox(text)
+    m = int(size * 0.55)
+    th = tb[3] - tb[1]
+    oy = m - tb[1]
+    layer_w, layer_h = (tb[2] - tb[0]) + 2 * m, th + 2 * m
+    # outline + outer glow reach. The glow is faint (alpha 35) but it is exactly
+    # what visually welds two rows together, so it counts as ink.
+    reach = stroke + max(2, int(round(size * 0.07)))
+    return layer_w, layer_h, max(0, oy - reach), min(layer_h, oy + th + reach)
+
+
 # --------------------------------------------------------------------------
 # Profile / misc helpers
 # --------------------------------------------------------------------------
@@ -277,7 +342,7 @@ class CoverSpec:
     logo_style: str = "sticker"
     brand_stroke: int = 0               # 0 -> style.brand_stroke_width
 
-    layout: str = "safe"
+    layout: str = ""                    # "" -> style.layout, else "safe"
     picture: Optional[str] = None       # None -> style.picture_mode, else band
     safe_top: Optional[float] = None    # None -> style.safe_zone_top_pct
     safe_bottom: Optional[float] = None
@@ -321,7 +386,33 @@ class Resolved:
     picture: str
     max_w: int
     brand_font: str
+    layout: str = "safe"
     contrast_boost: bool = False
+    # Secondary-row colours. They used to be module literals (GREY / WHITE),
+    # which contradicts SKILL.md 8.2 ("the profile owns the colours; a script
+    # must not carry a colour literal"). Now profile-driven, same defaults.
+    sub_color: Tuple[int, int, int] = GREY
+    tag_color: Tuple[int, int, int] = WHITE
+    # --- stack-block placement (2026-10-15, user: 「标题太靠下了，已经和底部的
+    # logo 放到一起了」) ---------------------------------------------------
+    # The block is bottom-anchored, so it always ends `stack_inset` above the
+    # safe-band bottom. Raising that value LIFTS the whole block; ``block_scale``
+    # shrinks its type (the brand mark keeps its profile size -- it is the
+    # signature, not another headline row). Note these work together: shrinking
+    # alone would pull the block's top edge DOWN, because it is anchored by its
+    # bottom, so a "smaller and higher" look needs both.
+    stack_inset: float = STACK_BOTTOM_INSET
+    block_scale: float = 1.0
+    # Row kinds to omit entirely: any of "sub" / "stat" / "tag" (the headline and
+    # the brand mark always stay). This is the 「精简」 lever.
+    drop_rows: Tuple[str, ...] = ()
+    # Where the rows sit in the safe band: "bottom" (default, historical look),
+    # "center", "top", or "split". Dropping a row from a BOTTOM-anchored block
+    # pulls its top edge DOWN -- so 「精简」 alone makes the title sit lower, not
+    # higher; lifting needs this anchor (2026-10-15).
+    #   "split" -- copy rows head the band, the signature is pinned to its foot
+    #   ("title up top, mark at the bottom"). Both margins are `stack_inset`.
+    stack_anchor: str = "bottom"
 
 
 def resolve(spec: CoverSpec) -> Resolved:
@@ -344,14 +435,27 @@ def resolve(spec: CoverSpec) -> Resolved:
     safe_bottom = float(style.get("safe_zone_bottom_pct") or 0.22) \
         if spec.safe_bottom is None else spec.safe_bottom
     picture = spec.picture or style.get("picture_mode") or "band"
+    # ⭐ the layout is a PROFILE value too (nba = "stack" since 2026-10-15).
+    # Explicit spec.layout wins; "" / None means "ask the profile". Leaving the
+    # CoverSpec default at "safe" silently overrode the profile in every caller
+    # that did not pass it (the spec test caught exactly that).
+    layout = spec.layout or style.get("layout") or "safe"
     max_w = int(canvas_w * spec.headline_max_width)
     brand_font = BOLD_FONT if spec.logo_style == "plain" else brand_font_path()
     return Resolved(head_size=head_size, head_stroke=head_stroke,
                     head_font=head_font, brand_stroke=brand_stroke,
                     logo_size=logo_size, safe_top=safe_top,
                     safe_bottom=safe_bottom, picture=picture, max_w=max_w,
-                    brand_font=brand_font,
-                    contrast_boost=bool(style.get("contrast_boost", False)))
+                    brand_font=brand_font, layout=layout,
+                    contrast_boost=bool(style.get("contrast_boost", False)),
+                    sub_color=tuple(style.get("sub_color") or GREY),
+                    tag_color=tuple(style.get("tagline_color") or WHITE),
+                    stack_inset=float(style.get("stack_bottom_inset_pct")
+                                      if style.get("stack_bottom_inset_pct")
+                                      is not None else STACK_BOTTOM_INSET),
+                    block_scale=float(style.get("block_scale") or 1.0),
+                    drop_rows=tuple(style.get("drop_rows") or ()),
+                    stack_anchor=str(style.get("stack_anchor") or "bottom"))
 
 
 # --------------------------------------------------------------------------
@@ -365,11 +469,27 @@ def compose(frame: Image.Image, spec: CoverSpec,
     engine handles the 1080-wide rescale and the clean-band crop.
     """
     res = res or resolve(spec)
+    # ``stack`` = one single text block. The headline + sub stop floating at the
+    # top of the band and join stat / tagline / brand in the bottom stack, so
+    # the cover reads as ONE piece of copy instead of an upper and a lower
+    # group. Geometry (fill picture, safe band, scrim, backdrop) is identical
+    # to ``safe`` -- only the row list and the scrim reach change.
+    lay = res.layout
+    stack = lay == "stack"
+    # ⚠️ `stack` MUST be normalised to "safe" here, not only when it differs
+    # from spec.layout: the fill-picture branch below keys off
+    # ``spec.layout == "safe"``, so leaving the literal "stack" in place makes
+    # the geometry fall through to the `band` picture (picture strip only
+    # 422-667 instead of the full 422-1497 band).
+    norm = "safe" if stack else lay
+    if spec.layout != norm:
+        spec = dc_replace(spec, layout=norm)
     canvas_w, canvas_h = spec.canvas_w, spec.canvas_h
     style = spec.style or {}
     accent = tuple(style.get("fill_color") or GOLD)
 
-    f_head = fit(res.head_font, res.head_size)
+    f_head = fit(res.head_font,
+                 max(40, int(round(res.head_size * res.block_scale))))
     head_text = wrap2(f_head, spec.headline, res.max_w)
     while block_w(f_head, head_text) > res.max_w and f_head.size > 40:
         f_head = fit(res.head_font, f_head.size - 4)
@@ -382,11 +502,16 @@ def compose(frame: Image.Image, spec: CoverSpec,
     gap_head_sub = int(f_head.size * 0.14) if spec.sub else 0
     top_block_h = head_h + gap_head_sub + sub_h
 
-    f_stat = fit(res.head_font, spec.stat_size or f_head.size)
+    # ``stat_size: 0`` means "match the headline", and f_head already carries
+    # block_scale -- only an explicit stat_size needs scaling of its own.
+    stat_base = int(round(spec.stat_size * res.block_scale)) \
+        if spec.stat_size else f_head.size
+    f_stat = fit(res.head_font, max(40, stat_base))
     stat_text = wrap2(f_stat, spec.stat, res.max_w)
     while block_w(f_stat, stat_text) > res.max_w and f_stat.size > 40:
         f_stat = fit(res.head_font, f_stat.size - 4)
-    f_tag = fit(BOLD_FONT, spec.tagline_size or 44)
+    f_tag = fit(BOLD_FONT, max(22, int(round(
+        (spec.tagline_size or 44) * res.block_scale))))
     tag_text = wrap2(f_tag, spec.tagline, res.max_w)
     while block_w(f_tag, tag_text) > res.max_w and f_tag.size > 22:
         f_tag = fit(BOLD_FONT, f_tag.size - 2)
@@ -406,19 +531,81 @@ def compose(frame: Image.Image, spec: CoverSpec,
     while text_w(f_logo, spec.logo)[0] > canvas_w - 70 and f_logo.size > 18:
         f_logo = fit(res.brand_font, f_logo.size - 2)
 
+    # The sticker/artistic lockup is painted on a padded layer whose ink is NOT
+    # centred in it, so this row must be laid out from the INK box (see
+    # brand_lockup_box). `plain` draws like any other text row.
+    logo_lockup = spec.logo_style in ("artistic", "sticker")
+    logo_layer_h = logo_ink_top = logo_ink_h = 0
+    if spec.logo and logo_lockup:
+        _, logo_layer_h, logo_ink_top, _ink_bot = brand_lockup_box(
+            res.brand_font, f_logo.size, spec.logo, res.brand_stroke)
+        logo_ink_h = _ink_bot - logo_ink_top
+
+    # ``drop_rows`` is a BLOCK knob -- it prunes rows out of the single stacked
+    # block. The `safe` fallback draws its title group separately (it never
+    # reaches this builder) and stays byte-identical to what the user signed off
+    # on, so the filter is only armed when the rows really form one block.
+    drop = set(res.drop_rows) if stack else set()
+
     def build_rows(f_stat_):
         r = []
-        if spec.stat:
+        if stack:
+            # headline + grey sub become the first two rows of the single block
+            if "headline" not in drop:
+                r.append(("headline", head_text, f_head, accent, res.head_stroke))
+            if spec.sub and "sub" not in drop:
+                r.append(("sub", spec.sub, f_sub, res.sub_color, 3))
+        if spec.stat and "stat" not in drop:
             r.append(("stat", stat_text, f_stat_, accent, 6))
-        if spec.tagline:
-            r.append(("tag", tag_text, f_tag, WHITE, 4))
-        if spec.logo:
+        if spec.tagline and "tag" not in drop:
+            r.append(("tag", tag_text, f_tag, res.tag_color, 4))
+        if spec.logo and "logo" not in drop:
             r.append(("logo", spec.logo, f_logo, accent, res.brand_stroke))
         return r
 
+    def row_h(kind, s, f):
+        """Advance height of a row. The brand mark advances by its INK box."""
+        if kind == "logo" and logo_lockup:
+            return logo_ink_h
+        return block_h(f, s)
+
+    def gap_after(kind, nxt, hh):
+        """Trailing gap of a row, as a fraction of that row's own height."""
+        if stack:
+            if kind == "sub" and nxt == "stat":
+                # visual break between the title group and the info group
+                return int(safe_h * STACK_GROUP_LEAD)
+            if nxt == "logo":
+                return int(safe_h * STACK_BRAND_LEAD)
+            return int(hh * STACK_ROW_GAP)
+        return int(hh * (BRAND_LEAD if nxt == "logo" else ROW_GAP))
+
     def rows_h(r):
-        hs = [block_h(f, s) for (_, s, f, _, _) in r]
-        return sum(hs) + sum(int(h * ROW_GAP) for h in hs[:-1])
+        hs = [row_h(k, s, f) for (k, s, f, _, _) in r]
+        return sum(hs) + sum(gap_after(r[i][0], r[i + 1][0], hs[i])
+                             for i in range(len(hs) - 1))
+
+    def anchored_rows_y(h: int) -> int:
+        """Top edge of the row stack, per ``res.stack_anchor``.
+
+        ``bottom`` reproduces the historical layout byte for byte; ``center``
+        and ``top`` lift the block off the profile-grid edge (2026-10-15, user:
+        「标题太靠下了，已经和底部的 logo 放到一起了」).
+
+        ``split`` is the fourth mode: the COPY rows (headline / stat / tagline)
+        sit at the head of the band and the signature is pinned to its foot, so
+        the cover reads "title up top, mark at the bottom" (2026-10-15, user:
+        「logo 怎么往上提了呢，还是要标题在上，logo 在下」). Only the copy rows
+        are anchored here -- the brand row is placed absolutely in the draw loop.
+        """
+        if stack and res.stack_anchor == "top":
+            return s_top + int(safe_h * 0.10)
+        if stack and res.stack_anchor == "split":
+            # same inset the signature gets at the foot -> symmetric margins
+            return s_top + int(safe_h * res.stack_inset)
+        if stack and res.stack_anchor == "center":
+            return s_top + max(0, int((safe_h - h) / 2))
+        return s_bot - pad_bottom - h
 
     # ------------------------------------------------------------ geometry --
     s_top = int(canvas_h * res.safe_top)
@@ -428,10 +615,21 @@ def compose(frame: Image.Image, spec: CoverSpec,
 
     rows = build_rows(f_stat)
     pad = int(safe_h * 0.030)
+    # Reserve above the safe-band bottom for the bottom stack. Deliberately
+    # smaller than `pad`: the brand lockup's ink box already carries its own
+    # outline + glow reach, and keeping the old 32px here would push the whole
+    # stack 24px higher now that the brand row is sized honestly -- which on
+    # 2026-10-15 moved the stat row into the face box on D-Rose (the one cover
+    # that had scored a clean `cover=pass`). Bottom-anchoring from 8px instead
+    # keeps the stat row exactly where it was while giving the brand its lead.
+    pad_bottom = int(safe_h * 0.008)
+    if stack:
+        # one tall block: pull it clear of the profile-grid edge instead
+        pad_bottom = int(safe_h * res.stack_inset)
     g_top = int(safe_h * 0.028)          # headline block -> picture
     g_bot = int(safe_h * 0.028)          # picture -> first bottom row
     stat_capped = False
-    if spec.layout == "safe" and res.picture == "fill":
+    if spec.layout == "safe" and (res.picture == "fill" or stack):
         img_h = safe_h
     else:
         img_h = safe_h - (2 * pad + top_block_h + g_top + g_bot + rows_h(rows))
@@ -444,10 +642,24 @@ def compose(frame: Image.Image, spec: CoverSpec,
             img_h = safe_h - (2 * pad + top_block_h + g_top + g_bot + rows_h(rows))
         img_h = max(80, img_h)
 
+    # `split` = copy rows at the head, signature at the foot. Resolved here (not
+    # next to `rows`) because build_rows() may have been re-run by the cap loop
+    # above, and the scrim + the draw loop both need the copy-only height.
+    split = stack and res.stack_anchor == "split"
+    content_h = rows_h([r for r in rows if r[0] != "logo"]) if split else 0
+
     # ------------------------------------------------------------- source ---
     src_w, src_h = frame.size
-    scale = canvas_w / src_w
-    img = frame.resize((canvas_w, int(src_h * scale)), Image.LANCZOS)
+    # COVER-fit, never stretch. ``canvas_w / src_w`` alone makes a landscape
+    # source (1280x720) only 607 px tall after scaling, and the band is 1075 --
+    # the crop then got resized up to 1075 and every player came out 1.8x too
+    # tall (2026-10-15, video-b1374643 Morant / video-bd71bcd1 Shaq: "封面里
+    # 画面被拉长"). Scaling by the LARGER of the two ratios keeps the aspect
+    # and simply crops the extra width instead.
+    scale = max(canvas_w / src_w, img_h / src_h)
+    img = frame.resize((int(round(src_w * scale)), int(round(src_h * scale))),
+                       Image.LANCZOS)
+    pic_origin_x = max(0, (img.size[0] - canvas_w) // 2)
 
     # Trim away the bands that carry burned-in video titles/subtitles so the
     # cover never shows a second copy of the headline or a stray caption.
@@ -472,7 +684,12 @@ def compose(frame: Image.Image, spec: CoverSpec,
         need = min(need, hi - lo)
         c_mid = (lo + hi) / 2 + (spec.focus - 0.5) * (hi - lo)
         c_top = min(max(c_mid - need / 2, lo), hi - need)
-        crop = img.crop((0, int(round(c_top * scale)), canvas_w,
+        # the window is exactly canvas_w x target_h in RESIZED px; when the
+        # cover-fit scale made the image wider than the canvas, crop the extra
+        # width off CENTRED (the old x=0 kept the left edge, so a landscape
+        # source always showed its left third)
+        x0 = pic_origin_x
+        crop = img.crop((x0, int(round(c_top * scale)), x0 + canvas_w,
                          int(round((c_top + need) * scale))))
         return crop, int(round(c_top * scale)), int(round(need * scale))
 
@@ -495,7 +712,7 @@ def compose(frame: Image.Image, spec: CoverSpec,
         img_y = s_top
         img_crop, pic_origin_y, pic_crop_h = crop_band(img_h)
         head_y = s_top + pad
-        rows_y = s_bot - pad - rows_h(rows)
+        rows_y = anchored_rows_y(rows_h(rows))
         rows_step = None
     else:
         # Picture is a strip between the text rows, so each row keeps a clean
@@ -505,6 +722,14 @@ def compose(frame: Image.Image, spec: CoverSpec,
         head_y = s_top + pad
         rows_y = img_y + img_h + g_bot
         rows_step = None
+
+    if split:
+        # the copy rows head the band whatever the picture mode is
+        rows_y = anchored_rows_y(rows_h(rows))
+
+    if stack:
+        # the whole copy is one block: nothing floats at the top of the band
+        head_y = rows_y
 
     # --- picture: defocus the crowd, keep the subject crisp ----------------
     # A 720p sports frame upscaled to 1080 is noisy; sharpening it (the old
@@ -566,6 +791,15 @@ def compose(frame: Image.Image, spec: CoverSpec,
         if res.picture == "fill":
             # the text sits ON the picture, so it needs its own scrim
             depth = max(1, int(safe_h * 0.34))
+            if split:
+                # copy at the head, signature at the foot: the scrim only has to
+                # reach the bottom of the copy -- darkening the whole band would
+                # dim the picture for nothing
+                depth = max(depth,
+                            int(rows_y + content_h - s_top) + int(safe_h * 0.03))
+            elif stack:
+                # one tall block: the scrim has to reach its top edge
+                depth = max(depth, int(s_bot - rows_y) + int(safe_h * 0.03))
             band = np.zeros(canvas_h, np.float32)
             i0 = np.arange(0, min(depth, safe_h))
             band[s_top + i0] = (1.0 - i0 / depth) ** 1.3
@@ -590,32 +824,45 @@ def compose(frame: Image.Image, spec: CoverSpec,
                             "x": int(bb[0]), "y": int(bb[1]),
                             "w": int(bb[2] - bb[0]), "h": int(bb[3] - bb[1])})
 
-    record("headline",
-           head_text,
-           center_text(draw, head_text, f_head, head_y + head_h / 2,
-                       accent, res.head_stroke, canvas_w=canvas_w))
-    if spec.sub:
-        record("sub", spec.sub,
-               center_text(draw, spec.sub, f_sub,
-                           head_y + head_h + gap_head_sub + sub_h / 2,
-                           GREY, 3, canvas_w=canvas_w))
+    if not stack:
+        record("headline",
+               head_text,
+               center_text(draw, head_text, f_head, head_y + head_h / 2,
+                           accent, res.head_stroke, canvas_w=canvas_w))
+        if spec.sub:
+            record("sub", spec.sub,
+                   center_text(draw, spec.sub, f_sub,
+                               head_y + head_h + gap_head_sub + sub_h / 2,
+                               res.sub_color, 3, canvas_w=canvas_w))
 
     brand_region = None
     y = rows_y
-    for (kind, s, f, fill, stroke) in rows:
-        hh = block_h(f, s)
+    n_rows = len(rows)
+    for idx, (kind, s, f, fill, stroke) in enumerate(rows):
+        hh = row_h(kind, s, f)
+        if split and kind == "logo":
+            # The mark is a FOOTER, not the copy block's last line: pin it to the
+            # band foot instead of letting it hang below the stat row
+            # (2026-10-15, user: 「logo 怎么往上提了呢，还是要标题在上，
+            # logo 在下呢」). Mirrors the copy inset, so both margins match.
+            y = s_bot - int(safe_h * res.stack_inset) - hh
         cy = y + hh / 2
-        if kind == "logo" and spec.logo_style in ("artistic", "sticker"):
-            lw, lh = draw_brand_lockup(canvas, s, res.brand_font, f.size, cy,
+        if kind == "logo" and logo_lockup:
+            # Align the lockup's INK box with this row instead of centring its
+            # padded layer -- otherwise the mark rides up into the tagline.
+            draw_cy = y - logo_ink_top + logo_layer_h / 2
+            lw, lh = draw_brand_lockup(canvas, s, res.brand_font, f.size, draw_cy,
                                        stroke=stroke,
                                        gradient=spec.logo_style == "artistic",
                                        glow=spec.logo_style == "artistic",
                                        highlight=spec.logo_style == "artistic",
                                        flat=accent)
-            bx, by = int((canvas_w - lw) / 2), int(cy - lh / 2)
-            brand_region = {"text": s, "x": bx, "y": by, "w": lw, "h": lh}
-            regions.append({"kind": "logo", "text": s, "x": bx, "y": by,
-                            "w": lw, "h": lh})
+            bx = int((canvas_w - lw) / 2)
+            # record the INK box, not the padded layer: QA (face occlusion,
+            # safe band) must see where the pixels actually are
+            brand_region = {"text": s, "x": bx, "y": int(y), "w": lw, "h": hh}
+            regions.append({"kind": "logo", "text": s, "x": bx, "y": int(y),
+                            "w": lw, "h": hh})
         else:
             boxes = center_text(draw, s, f, cy, fill, stroke, canvas_w=canvas_w)
             record("logo" if kind == "logo" else kind, s, boxes)
@@ -624,21 +871,32 @@ def compose(frame: Image.Image, spec: CoverSpec,
                 brand_region = {"text": s, "x": int(bb[0]), "y": int(bb[1]),
                                 "w": int(bb[2] - bb[0]),
                                 "h": int(bb[3] - bb[1])}
-        y += hh + (rows_step if rows_step is not None else int(hh * ROW_GAP))
+        nxt = rows[idx + 1][0] if idx + 1 < n_rows else None
+        y += hh + gap_after(kind, nxt, hh)
 
     def row_bottom():
+        if split:
+            # the signature is pinned to the band foot, not stacked under the
+            # copy -- report where its ink actually ends
+            return float(s_bot - int(safe_h * res.stack_inset))
         yy = rows_y
-        for (kind, s, f, _, _) in rows:
-            hh = block_h(f, s)
-            yy += hh + (rows_step if rows_step is not None else int(hh * ROW_GAP))
-        return yy - (rows_step if rows_step is not None and rows else 0)
+        for i, (kind, s, f, _, _) in enumerate(rows):
+            hh = row_h(kind, s, f)
+            nxt = rows[i + 1][0] if i + 1 < len(rows) else None
+            yy += hh + gap_after(kind, nxt, hh)
+        if rows and rows_step is None:
+            yy -= gap_after(rows[-1][0], None,
+                            row_h(rows[-1][0], rows[-1][1], rows[-1][2]))
+        elif rows and rows_step is not None:
+            yy -= rows_step
+        return yy
 
     bottom = row_bottom() if rows else head_y + top_block_h
     safe_ok = (head_y >= s_top and bottom <= s_bot)
 
     meta: Dict[str, Any] = {
         "canvas": {"width": canvas_w, "height": canvas_h},
-        "layout": spec.layout,
+        "layout": lay,
         "picture_mode": res.picture if spec.layout == "safe" else None,
         "backdrop": spec.backdrop if spec.layout == "safe" else None,
         "safe_band": {"top": s_top, "bottom": s_bot,
@@ -648,6 +906,7 @@ def compose(frame: Image.Image, spec: CoverSpec,
         "picture_box": {"y": int(img_y), "h": int(img_h)},
         "picture_src": {
             "scale": scale,                  # source px -> resized-frame px
+            "crop_origin_x": pic_origin_x,   # in resized-frame px (centred)
             "crop_origin_y": pic_origin_y,   # in resized-frame px
             "crop_h": pic_crop_h,
             "dst_y": int(img_y),
@@ -737,7 +996,7 @@ def format_report(spec: CoverSpec, meta: Dict[str, Any],
           f"brand_stroke={res['styles']['brand_stroke_width']}]",
     ]
     top, bottom = res["composition"]["top"], res["composition"]["bottom"]
-    if res["layout"] in ("safe", "letter"):
+    if res["layout"] in ("safe", "stack", "letter"):
         lines.append(
             f"  safe-zone: composition {int(top)}-{int(bottom)} inside "
             f"{s_top}-{s_bot} -> {'OK' if res['safe_ok'] else 'OVERFLOW'}")
@@ -791,6 +1050,7 @@ def map_boxes_to_canvas(boxes: List[Dict[str, Any]],
     warning.
     """
     scale = picture_src.get("scale") or 1.0
+    origin_x = float(picture_src.get("crop_origin_x") or 0)
     origin = float(picture_src.get("crop_origin_y") or 0)
     crop_h = float(picture_src.get("crop_h") or 1)
     dst_y = float(picture_src.get("dst_y") or 0)
@@ -798,11 +1058,12 @@ def map_boxes_to_canvas(boxes: List[Dict[str, Any]],
     fy = dst_h / max(1.0, crop_h)
     out: List[Dict[str, Any]] = []
     for b in boxes or []:
-        x = float(b.get("x", 0)) * scale
+        x = float(b.get("x", 0)) * scale - origin_x
         w = float(b.get("w", 0)) * scale
         y = dst_y + (float(b.get("y", 0)) * scale - origin) * fy
         h = float(b.get("h", 0)) * scale * fy
-        if drop_hidden and (y + h < dst_y or y > dst_y + dst_h):
+        if drop_hidden and (y + h < dst_y or y > dst_y + dst_h
+                            or x + w < 0 or x > 1080):
             continue
         out.append({"x": int(round(x)), "y": int(round(y)),
                     "w": int(round(w)), "h": int(round(h))})
@@ -874,7 +1135,7 @@ def letter_cover(img: Image.Image, spec: CoverSpec,
                center_text(draw, spec.sub, f_sub,
                            s_top + pad + head_h
                            + int(f_head.size * 0.14) + block_h(f_sub, spec.sub) / 2,
-                           GREY, 3, canvas_w=cw))
+                           res.sub_color, 3, canvas_w=cw))
 
     # bottom-up stack, mirroring compose(): stat -> tagline -> brand
     brand_region = None
@@ -889,7 +1150,7 @@ def letter_cover(img: Image.Image, spec: CoverSpec,
         pending.append(("tag", spec.tagline,
                         fit_line(BOLD_FONT, spec.tagline,
                                  spec.tagline_size or 44, max_w, 22),
-                        WHITE, 4))
+                        res.tag_color, 4))
     if spec.logo:
         pending.append(("logo", spec.logo,
                         fit_line(res.brand_font, spec.logo,
@@ -897,39 +1158,59 @@ def letter_cover(img: Image.Image, spec: CoverSpec,
                                  cw - 70, 18),
                         accent, res.brand_stroke))
     heights = [block_h(f, s) for (_, s, f, _, _) in pending]
-    total = sum(heights) + sum(int(h * ROW_GAP) for h in heights[:-1])
-    y = s_bot - pad - total
+
+    # Same ink-vs-layer correction as compose(): the sticker lockup's padded
+    # layer is much taller than its ink and not centred on it, so the brand row
+    # advances by its INK height and gets extra lead above it.
+    logo_lockup = spec.logo_style in ("artistic", "sticker")
+    logo_layer_h = logo_ink_top = 0
+    if spec.logo and logo_lockup:
+        li = next(i for i, p in enumerate(pending) if p[0] == "logo")
+        _, logo_layer_h, logo_ink_top, _ib = brand_lockup_box(
+            res.brand_font, pending[li][2].size, spec.logo, res.brand_stroke)
+        heights[li] = _ib - logo_ink_top
+
+    def _gap(i):
+        if i + 1 >= len(pending):
+            return 0
+        hh = heights[i]
+        return int(hh * (BRAND_LEAD if pending[i + 1][0] == "logo" else ROW_GAP))
+
+    total = sum(heights) + sum(_gap(i) for i in range(len(heights) - 1))
+    # same smaller bottom reserve as compose() -- see the pad_bottom note there
+    pad_bottom = int(safe_h * 0.008)
+    y = s_bot - pad_bottom - total
     row_sizes: Dict[str, Optional[int]] = {"stat": None, "tagline": None,
                                            "brand": None}
     key_of = {"stat": "stat", "tag": "tagline", "logo": "brand"}
-    for (kind, s, f, fill, stroke), hh in zip(pending, heights):
+    for idx, ((kind, s, f, fill, stroke), hh) in enumerate(zip(pending, heights)):
         row_sizes[key_of[kind]] = f.size
-        cy = y + hh / 2
-        if kind == "logo" and spec.logo_style in ("artistic", "sticker"):
+        if kind == "logo" and logo_lockup:
+            draw_cy = y - logo_ink_top + logo_layer_h / 2
             lw, lh = draw_brand_lockup(
-                canvas, s, res.brand_font, f.size, cy, stroke=stroke,
+                canvas, s, res.brand_font, f.size, draw_cy, stroke=stroke,
                 gradient=spec.logo_style == "artistic",
                 glow=spec.logo_style == "artistic",
                 highlight=spec.logo_style == "artistic", flat=accent)
-            bx, by = int((cw - lw) / 2), int(cy - lh / 2)
-            brand_region = {"text": s, "x": bx, "y": by, "w": lw, "h": lh}
-            regions.append({"kind": "logo", "text": s, "x": bx, "y": by,
-                            "w": lw, "h": lh})
+            bx = int((cw - lw) / 2)
+            brand_region = {"text": s, "x": bx, "y": int(y), "w": lw, "h": hh}
+            regions.append({"kind": "logo", "text": s, "x": bx, "y": int(y),
+                            "w": lw, "h": hh})
         else:
-            boxes = center_text(draw, s, f, cy, fill, stroke, canvas_w=cw)
+            boxes = center_text(draw, s, f, y + hh / 2, fill, stroke, canvas_w=cw)
             record(kind, s, boxes)
             if kind == "logo":
                 bb = boxes[0][2]
                 brand_region = {"text": s, "x": int(bb[0]), "y": int(bb[1]),
                                 "w": int(bb[2] - bb[0]),
                                 "h": int(bb[3] - bb[1])}
-        y += hh + int(hh * ROW_GAP)
+        y += hh + _gap(idx)
 
     if res.contrast_boost:
         canvas = ImageEnhance.Contrast(canvas).enhance(1.15)
 
     if pending:
-        bottom = s_bot - pad
+        bottom = s_bot - pad_bottom
     else:
         bottom = s_top + pad + head_h
         if f_sub:

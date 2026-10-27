@@ -113,11 +113,12 @@ def main():
                          "outer glow and white highlight (keep it for marks "
                          "burned over busy picture, not on a black band); "
                          "plain = flat gold Arial Bold (legacy fallback)")
-    ap.add_argument("--layout", choices=["safe", "classic"], default="safe",
-                    help="safe (default) = composition confined to the "
-                         "--safe-top/--safe-bottom band, which is the only part "
-                         "of a 9:16 cover TikTok never crops (headline AND "
-                         "brand mark stay visible in the profile grid); "
+    ap.add_argument("--layout", choices=["safe", "stack", "classic"], default=None,
+                    help="default = the profile's cover_style.layout (nba = "
+                         "stack). safe = two groups, title floating at the top "
+                         "of the --safe-top/--safe-bottom band, which is the "
+                         "only part of a 9:16 cover TikTok never crops; stack = "
+                         "every row in ONE bottom block; "
                          "classic = legacy full-canvas letterbox, which loses "
                          "the top and bottom lines in the grid. Kept only for "
                          "reproducing older covers.")
@@ -196,7 +197,7 @@ def main():
         logo_ratio=args.logo_ratio,
         logo_style=args.logo_style,
         brand_stroke=args.brand_stroke,
-        layout=args.layout,
+        layout=args.layout or "",
         picture=args.picture,
         safe_top=args.safe_top,
         safe_bottom=args.safe_bottom,

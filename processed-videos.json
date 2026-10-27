@@ -282,6 +282,550 @@
       ],
       "audio_fixed_at": "2026-09-29T13:25+08:00",
       "audio_note": "开头 0-4.4s 中文旁白（2012年NBA全明星赛的精彩呈现）在 keep_original 判定时漏判。已静音 0-4.1s + 4.1-4.45s 淡入，只换音轨。210s 处中文为源 ASR 误报（实为英文解说），未处理。"
+    },
+    {
+      "source_file": "1米8的个子面对2米16的奥尼尔都不怕，像一个战士一样，拼到混身是伤，永不放弃#艾弗森#NBA_xWT126.mp4",
+      "source_path": "/Users/jason/Downloads/1米8的个子面对2米16的奥尼尔都不怕，像一个战士一样，拼到混身是伤，永不放弃#艾弗森#NBA_xWT126.mp4",
+      "file_size": 6165535,
+      "mtime": 1791979470,
+      "processed_at": "2026-10-15T02:07:09+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/1米8的个子面对2米16的奥尼尔都不怕_像一个战士一样_拼到",
+      "profile": "nba",
+      "status": "WARNING",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "【约基奇半场7次助攻合集】妙手连连！不看人妙传助攻戈登篮下轻松背扣！底线背传连过三人助攻约翰逊三分命中！约老师上半场共送出7次助攻！_xWT126.mp4",
+      "source_path": "/Users/jason/Downloads/【约基奇半场7次助攻合集】妙手连连！不看人妙传助攻戈登篮下轻松背扣！底线背传连过三人助攻约翰逊三分命中！约老师上半场共送出7次助攻！_xWT126.mp4",
+      "file_size": 11646350,
+      "mtime": 1791979344,
+      "processed_at": "2026-10-15T02:18:02+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/约基奇半场7次助攻合集_妙手连连_不看人妙传助攻戈登篮下轻松",
+      "profile": "nba",
+      "status": "WARNING",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "6场比赛21记扣篮统治内线！03年季后赛奥尼尔西部半决赛对阵马刺所有扣篮！#奥尼尔_xWT126.mp4",
+      "source_path": "/Users/jason/Downloads/6场比赛21记扣篮统治内线！03年季后赛奥尼尔西部半决赛对阵马刺所有扣篮！#奥尼尔_xWT126.mp4",
+      "file_size": 11597973,
+      "mtime": 1791979433,
+      "processed_at": "2026-10-15T02:28:40+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/6场比赛21记扣篮统治内线_03年季后赛奥尼尔西部半决赛对阵",
+      "profile": "nba",
+      "status": "WARNING",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "“科比 03 季后赛一些进攻集锦”#科比_xWT156.mp4",
+      "source_path": "/Users/jason/Downloads/“科比 03 季后赛一些进攻集锦”#科比_xWT156.mp4",
+      "file_size": 21586573,
+      "mtime": 1791979452,
+      "processed_at": "2026-10-15T02:36:13+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/科比_03_季后赛一些进攻集锦_科比_xWT156",
+      "profile": "nba",
+      "status": "WARNING",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "【30天30队之热火：韦德生涯高燃扣篮混剪】闪电侠暴力美学扣篮合集！作为03白金一代的第五顺位，大学时期就“让了联盟一副半月板”的闪电侠，即使身高仅193公分，韦德靠.mp4",
+      "source_path": "/Users/jason/Downloads/【30天30队之热火：韦德生涯高燃扣篮混剪】闪电侠暴力美学扣篮合集！作为03白金一代的第五顺位，大学时期就“让了联盟一副半月板”的闪电侠，即使身高仅193公分，韦德靠.mp4",
+      "file_size": 16578090,
+      "mtime": 1791979278,
+      "processed_at": "2026-10-15T02:46:06+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/30天30队之热火_韦德生涯高燃扣篮混剪_闪电侠暴力美学扣篮",
+      "profile": "nba",
+      "status": "WARNING",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "马布里生涯十佳球！ #NBA #篮球 #马布里 #十佳球_xWT128.mp4",
+      "source_path": "/Users/jason/Downloads/马布里生涯十佳球！ #NBA #篮球 #马布里 #十佳球_xWT128.mp4",
+      "file_size": 7260346,
+      "mtime": 1791979324,
+      "processed_at": "2026-10-15T03:09:38+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/马布里生涯十佳球_NBA_篮球_马布里_十佳球_xWT128",
+      "profile": "nba",
+      "status": "WARNING",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "隆多的传球藏着顶级球商，视野鬼魅，总能提前预判，把球送到别人看不见的空位。#隆多_xWT156.mp4",
+      "source_path": "/Users/jason/Downloads/隆多的传球藏着顶级球商，视野鬼魅，总能提前预判，把球送到别人看不见的空位。#隆多_xWT156.mp4",
+      "file_size": 17307368,
+      "mtime": 1791979228,
+      "processed_at": "2026-10-15T03:19:33+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/隆多的传球藏着顶级球商_视野鬼魅_总能提前预判_把球送到别人",
+      "profile": "nba",
+      "status": "WARNING",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "雷阿伦生涯十佳球！#NBA #篮球 #雷阿伦 #十佳球_xWT128.mp4",
+      "source_path": "/Users/jason/Downloads/雷阿伦生涯十佳球！#NBA #篮球 #雷阿伦 #十佳球_xWT128.mp4",
+      "file_size": 8412757,
+      "mtime": 1791979365,
+      "processed_at": "2026-10-15T03:36:37+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/雷阿伦生涯十佳球_NBA_篮球_雷阿伦_十佳球_xWT128",
+      "profile": "nba",
+      "status": "WARNING",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "【30队巡礼之公牛：罗斯公牛十佳球】永不磨灭的玫瑰印记🌹七年公牛岁月，场均19.7分3.7篮板6.2助攻——数据之外，真正震彻人心的，是罗斯屡遭伤病却从不向命运低头。那.mp4",
+      "source_path": "/Users/jason/Downloads/【30队巡礼之公牛：罗斯公牛十佳球】永不磨灭的玫瑰印记🌹七年公牛岁月，场均19.7分3.7篮板6.2助攻——数据之外，真正震彻人心的，是罗斯屡遭伤病却从不向命运低头。那.mp4",
+      "file_size": 18128566,
+      "mtime": 1791979301,
+      "processed_at": "2026-10-15T03:47:12+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/30队巡礼之公牛_罗斯公牛十佳球_永不磨灭的玫瑰印记_七年公",
+      "profile": "nba",
+      "status": "PASS",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "#全世界都忘了莫兰特有多强 #文班亚马 #科比 #艾弗森 #麦迪 #詹姆斯 #杜兰特 #库里 #欧文 #约基奇 #东契奇 #爱德华兹_xWT126.mp4",
+      "source_path": "/Users/jason/Downloads/#全世界都忘了莫兰特有多强 #文班亚马 #科比 #艾弗森 #麦迪 #詹姆斯 #杜兰特 #库里 #欧文 #约基奇 #东契奇 #爱德华兹_xWT126.mp4",
+      "file_size": 124661715,
+      "mtime": 1791979258,
+      "processed_at": "2026-10-15T04:30:27+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/全世界都忘了莫兰特有多强_文班亚马_科比_艾弗森_麦迪_詹姆",
+      "profile": "nba",
+      "status": "FAIL",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "“8 号科比是怎样打球的？”#科比_xWT126.mp4",
+      "source_path": "/Users/jason/Downloads/“8 号科比是怎样打球的？”#科比_xWT126.mp4",
+      "file_size": 21323560,
+      "mtime": 1792754975,
+      "processed_at": "2026-10-24T11:02:03+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/8_号科比是怎样打球的_科比_xWT126",
+      "profile": "nba",
+      "status": "PASS",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "“人 类 盖 帽 精 华”#NBA#盖帽_xWT128.mp4",
+      "source_path": "/Users/jason/Downloads/“人 类 盖 帽 精 华”#NBA#盖帽_xWT128.mp4",
+      "file_size": 17679397,
+      "mtime": 1792754884,
+      "processed_at": "2026-10-24T11:02:03+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/人_类_盖_帽_精_华_NBA_盖帽_xWT128",
+      "profile": "nba",
+      "status": "PASS",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "“加内特生涯十佳球”#加内特_xWT126.mp4",
+      "source_path": "/Users/jason/Downloads/“加内特生涯十佳球”#加内特_xWT126.mp4",
+      "file_size": 22827786,
+      "mtime": 1792755205,
+      "processed_at": "2026-10-24T11:02:03+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/加内特生涯十佳球_加内特_xWT126",
+      "profile": "nba",
+      "status": "PASS",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "【30天30队之开拓者：罗伊生涯高光】冷血大心脏，飘逸黄曼巴！ 2006年首轮第6顺位被森林狼选中，随后交易至开拓者，罗伊凭借飘逸技术全面球风，及关键时刻大心脏绝杀能.mp4",
+      "source_path": "/Users/jason/Downloads/【30天30队之开拓者：罗伊生涯高光】冷血大心脏，飘逸黄曼巴！ 2006年首轮第6顺位被森林狼选中，随后交易至开拓者，罗伊凭借飘逸技术全面球风，及关键时刻大心脏绝杀能.mp4",
+      "file_size": 16577629,
+      "mtime": 1792755123,
+      "processed_at": "2026-10-24T11:02:03+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/30天30队之开拓者_罗伊生涯高光_冷血大心脏_飘逸黄曼巴",
+      "profile": "nba",
+      "status": "PASS",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "【30天30队之骑士：欧文对阵马刺57分生涯之夜】这或许是欧文的真正成名之战！2015年3月12日，骑士客场挑战卫冕冠军马刺，欧文面对这支以经验和严明体系的球队，最后56秒连.mp4",
+      "source_path": "/Users/jason/Downloads/【30天30队之骑士：欧文对阵马刺57分生涯之夜】这或许是欧文的真正成名之战！2015年3月12日，骑士客场挑战卫冕冠军马刺，欧文面对这支以经验和严明体系的球队，最后56秒连.mp4",
+      "file_size": 20899819,
+      "mtime": 1792755074,
+      "processed_at": "2026-10-24T11:02:03+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/30天30队之骑士_欧文对阵马刺57分生涯之夜_这或许是欧文",
+      "profile": "nba",
+      "status": "PASS",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "拜伦•戴维斯生涯十佳球！ #NBA #篮球 #拜伦戴维斯 #十佳球_xWT128.mp4",
+      "source_path": "/Users/jason/Downloads/拜伦•戴维斯生涯十佳球！ #NBA #篮球 #拜伦戴维斯 #十佳球_xWT128.mp4",
+      "file_size": 4846545,
+      "mtime": 1792755050,
+      "processed_at": "2026-10-24T11:02:03+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/拜伦_戴维斯生涯十佳球_NBA_篮球_拜伦戴维斯_十佳球_x",
+      "profile": "nba",
+      "status": "PASS",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "贾马尔•克劳福德生涯十佳球！ #NBA #篮球 #克劳福德 #十佳球_xWT127.mp4",
+      "source_path": "/Users/jason/Downloads/贾马尔•克劳福德生涯十佳球！ #NBA #篮球 #克劳福德 #十佳球_xWT127.mp4",
+      "file_size": 10503776,
+      "mtime": 1792755241,
+      "processed_at": "2026-10-24T11:02:03+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/贾马尔_克劳福德生涯十佳球_NBA_篮球_克劳福德_十佳球",
+      "profile": "nba",
+      "status": "PASS",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "非常经典的一届全明星！这里面的人你认识多少？#NBA #篮球_xWT126.mp4",
+      "source_path": "/Users/jason/Downloads/非常经典的一届全明星！这里面的人你认识多少？#NBA #篮球_xWT126.mp4",
+      "file_size": 17943311,
+      "mtime": 1792755187,
+      "processed_at": "2026-10-24T11:02:03+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/非常经典的一届全明星_这里面的人你认识多少_NBA_篮球_x",
+      "profile": "nba",
+      "status": "PASS",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "鲁迪盖伊生涯十佳球！ #NBA #篮球 #鲁迪盖伊 #十佳球_xWT127.mp4",
+      "source_path": "/Users/jason/Downloads/鲁迪盖伊生涯十佳球！ #NBA #篮球 #鲁迪盖伊 #十佳球_xWT127.mp4",
+      "file_size": 10089062,
+      "mtime": 1792755105,
+      "processed_at": "2026-10-24T11:02:03+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/鲁迪盖伊生涯十佳球_NBA_篮球_鲁迪盖伊_十佳球_xWT1",
+      "profile": "nba",
+      "status": "PASS",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "【30天30队之国王：韦伯生涯十佳球】划时代的全能大前锋！1993年选秀大会，克里斯-韦伯以状元秀身份被魔术选中。生涯的15个赛季，韦伯曾效力于勇士、子弹（后更名为奇才.mp4",
+      "source_path": "/Users/jason/Downloads/【30天30队之国王：韦伯生涯十佳球】划时代的全能大前锋！1993年选秀大会，克里斯-韦伯以状元秀身份被魔术选中。生涯的15个赛季，韦伯曾效力于勇士、子弹（后更名为奇才.mp4",
+      "file_size": 10381350,
+      "mtime": 1793065581,
+      "processed_at": "2026-10-27T14:41:11+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/30天30队之国王_韦伯生涯十佳球_划时代的全能大前锋_19",
+      "profile": "nba",
+      "status": "WARNING",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "98全明星科比致敬乔丹的最后一舞#NBA #乔丹 #98全明星_xWT127.mp4",
+      "source_path": "/Users/jason/Downloads/98全明星科比致敬乔丹的最后一舞#NBA #乔丹 #98全明星_xWT127.mp4",
+      "file_size": 16988888,
+      "mtime": 1793066006,
+      "processed_at": "2026-10-27T15:10:33+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/98全明星科比致敬乔丹的最后一舞_NBA_乔丹_98全明星",
+      "profile": "nba",
+      "status": "WARNING",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "乔丹：你们的神回来了#乔丹_xWT126.mp4",
+      "source_path": "/Users/jason/Downloads/乔丹：你们的神回来了#乔丹_xWT126.mp4",
+      "file_size": 26113693,
+      "mtime": 1793066150,
+      "processed_at": "2026-10-27T15:38:15+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/乔丹_你们的神回来了_乔丹_xWT126",
+      "profile": "nba",
+      "status": "WARNING",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "#奥尼尔#篮球当普通人和奥尼尔打单挑是种什么体验？_xWT126.mp4",
+      "source_path": "/Users/jason/Downloads/#奥尼尔#篮球当普通人和奥尼尔打单挑是种什么体验？_xWT126.mp4",
+      "file_size": 8284773,
+      "mtime": 1793066325,
+      "processed_at": "2026-10-27T15:51:06+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/奥尼尔_篮球当普通人和奥尼尔打单挑是种什么体验_xWT126",
+      "profile": "nba",
+      "status": "WARNING",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "姚明生涯十大盖帽！ #NBA #篮球 #姚明 #盖帽_xWT158.mp4",
+      "source_path": "/Users/jason/Downloads/姚明生涯十大盖帽！ #NBA #篮球 #姚明 #盖帽_xWT158.mp4",
+      "file_size": 5121009,
+      "mtime": 1793065702,
+      "processed_at": "2026-10-27T16:04:33+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/姚明生涯十大盖帽_NBA_篮球_姚明_盖帽_xWT158",
+      "profile": "nba",
+      "status": "WARNING",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "#森林狼跳舞大叔#加内特#NBA感人故事 巅峰产生虚伪的拥护，黄昏见证真正的信徒_xWT127.mp4",
+      "source_path": "/Users/jason/Downloads/#森林狼跳舞大叔#加内特#NBA感人故事 巅峰产生虚伪的拥护，黄昏见证真正的信徒_xWT127.mp4",
+      "file_size": 6952148,
+      "mtime": 1793066222,
+      "processed_at": "2026-10-27T16:28:24+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/森林狼跳舞大叔_加内特_NBA感人故事_巅峰产生虚伪的拥护",
+      "profile": "nba",
+      "status": "WARNING",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "22岁的MVP，芝加哥等了一个世纪。你见过巅峰罗斯吗？#NBA#罗斯#公牛_xWT157.mp4",
+      "source_path": "/Users/jason/Downloads/22岁的MVP，芝加哥等了一个世纪。你见过巅峰罗斯吗？#NBA#罗斯#公牛_xWT157.mp4",
+      "file_size": 15131692,
+      "mtime": 1793065562,
+      "processed_at": "2026-10-27T17:11:26+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/22岁的MVP_芝加哥等了一个世纪_你见过巅峰罗斯吗_NBA",
+      "profile": "nba",
+      "status": "PASS",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "Top 10 MJ Plays 95-96 Season #乔丹_xWT112.mp4",
+      "source_path": "/Users/jason/Downloads/Top 10 MJ Plays 95-96 Season #乔丹_xWT112.mp4",
+      "file_size": 23715334,
+      "mtime": 1793065535,
+      "processed_at": "2026-10-27T17:44:31+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/Top_10_MJ_Plays_95_96_Season_乔",
+      "profile": "nba",
+      "status": "PASS",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "大鲨鱼搞笑斗舞合集#NBA#奥尼尔#幽默_xWT157.mp4",
+      "source_path": "/Users/jason/Downloads/大鲨鱼搞笑斗舞合集#NBA#奥尼尔#幽默_xWT157.mp4",
+      "file_size": 16571738,
+      "mtime": 1793066248,
+      "processed_at": "2026-10-27T17:47:14+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/大鲨鱼搞笑斗舞合集_NBA_奥尼尔_幽默_xWT157",
+      "profile": "nba",
+      "status": "WARNING",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "打架就打架，带个球干啥？#NBA#冲突#奥尼尔#哈登_xWT111.mp4",
+      "source_path": "/Users/jason/Downloads/打架就打架，带个球干啥？#NBA#冲突#奥尼尔#哈登_xWT111.mp4",
+      "file_size": 81949772,
+      "mtime": 1793065885,
+      "processed_at": "2026-10-27T17:59:26+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/打架就打架_带个球干啥_NBA_冲突_奥尼尔_哈登_xWT1",
+      "profile": "nba",
+      "status": "PASS",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "奥尼尔的精彩扣篮集锦#扣篮 #奥尼尔 #nba #暴扣 #篮球_xWT127.mp4",
+      "source_path": "/Users/jason/Downloads/奥尼尔的精彩扣篮集锦#扣篮 #奥尼尔 #nba #暴扣 #篮球_xWT127.mp4",
+      "file_size": 2174324,
+      "mtime": 1793066344,
+      "processed_at": "2026-10-27T18:04:38+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/奥尼尔的精彩扣篮集锦_扣篮_奥尼尔_nba_暴扣_篮球_xW",
+      "profile": "nba",
+      "status": "WARNING",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "麦迪十佳球第三期！#NBA #篮球 #麦迪_xWT126.mp4",
+      "source_path": "/Users/jason/Downloads/麦迪十佳球第三期！#NBA #篮球 #麦迪_xWT126.mp4",
+      "file_size": 16554390,
+      "mtime": 1793065606,
+      "processed_at": "2026-10-27T18:28:05+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/麦迪十佳球第三期_NBA_篮球_麦迪_xWT126",
+      "profile": "nba",
+      "status": "WARNING",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "NBA精彩超人瞬间#NBA_xWT127.mp4",
+      "source_path": "/Users/jason/Downloads/NBA精彩超人瞬间#NBA_xWT127.mp4",
+      "file_size": 5392031,
+      "mtime": 1793065960,
+      "processed_at": "2026-10-27T18:41:30+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/NBA精彩超人瞬间_NBA_xWT127",
+      "profile": "nba",
+      "status": "WARNING",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "爆粗口，打架，不见血不算犯规，93年公牛和尼克斯的对决，场场是刺刀见红#乔丹 #经典画面 #精彩对决_xWT126.mp4",
+      "source_path": "/Users/jason/Downloads/爆粗口，打架，不见血不算犯规，93年公牛和尼克斯的对决，场场是刺刀见红#乔丹 #经典画面 #精彩对决_xWT126.mp4",
+      "file_size": 41176086,
+      "mtime": 1793066113,
+      "processed_at": "2026-10-27T19:20:35+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/爆粗口_打架_不见血不算犯规_93年公牛和尼克斯的对决_场场",
+      "profile": "nba",
+      "status": "WARNING",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
+    },
+    {
+      "source_file": "07年全明星赛★奥尼尔与詹姆斯，霍华德激情斗舞#篮球#NBA#奥尼尔#詹姆斯#霍华德#全明星_xWT127.mp4",
+      "source_path": "/Users/jason/Downloads/07年全明星赛★奥尼尔与詹姆斯，霍华德激情斗舞#篮球#NBA#奥尼尔#詹姆斯#霍华德#全明星_xWT127.mp4",
+      "file_size": 5423509,
+      "mtime": 1793066293,
+      "processed_at": "2026-10-27T20:24:57+08:00",
+      "output_dir": "/Users/jason/Downloads/tiktok/07年全明星赛_奥尼尔与詹姆斯_霍华德激情斗舞_篮球_NBA",
+      "profile": "nba",
+      "status": "WARNING",
+      "artifacts": [
+        "final.mp4",
+        "cover.jpg",
+        "subtitles-en.srt",
+        "tiktok-post.md"
+      ]
     }
   ]
 }

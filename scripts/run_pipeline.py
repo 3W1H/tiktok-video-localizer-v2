@@ -223,16 +223,32 @@ def job_localize(video: str, work_dir: str, output_dir: str,
         }
         save_json(plan_path, minimal_plan)
 
+    # ⚠️ mix 的 --video 必须传 cleaned.mp4（run_mix 优先用显式 --video 做 mux）。
+    #    传原始视频会把带中文的原片直接 mux 成 final.mp4，cleaned 白做
+    #    （2026-10-27 实测：QA chinese_residue 全数命中，成片=原片）。
+    cleaned_video = work_path(work_dir, "cleaned.mp4")
+    mux_video = cleaned_video if os.path.exists(cleaned_video) else video
+
+    # timeline.json 有 TTS 条目（narration 流）才烧字幕；
+    # keep_original 且无 TTS 时，overlay 英文已由 clean 阶段画进 cleaned.mp4，
+    # 再 --burn 会叠双层字幕。SRT 侧车始终生成。
+    # 判据用 translated.json（tts 跑之前 timeline.json 还不存在）：
+    # 有译文条目 = narration 流 = 会有 TTS timeline = 要烧字幕。
+    translated = load_json(work_path(work_dir, "translated.json"), {}) or {}
+    has_narration_tts = bool(translated.get("entries"))
+
     steps = [
         ("generate_masks.py", ["--work-dir", work_dir, "--render-images"], "Generate masks"),
         ("clean_video.py", ["--video", video, "--work-dir", work_dir, "--method", "opencv"], "Clean video (opencv inpaint + blur, no black bars)"),
         ("audio_processor.py", ["tts", "--work-dir", work_dir], "TTS synthesis"),
         ("tts_timing.py", ["measure", "--work-dir", work_dir], "Measure TTS timing"),
         ("tts_timing.py", ["apply", "--work-dir", work_dir], "Apply timing decisions"),
-        ("audio_processor.py", ["mix", "--video", video, "--work-dir", work_dir,
+        ("audio_processor.py", ["mix", "--video", mux_video, "--work-dir", work_dir,
                                  "--output-dir", output_dir], "Mix audio"),
+        ("build_timeline.py", ["--work-dir", work_dir], "Build timeline from plan (no-TTS flows)"),
         ("render_subtitles.py", ["--work-dir", work_dir, "--output-dir", output_dir,
-                                  "--video", os.path.join(output_dir, "final.mp4"), "--burn"],
+                                  "--video", os.path.join(output_dir, "final.mp4")]
+                                  + (["--burn"] if has_narration_tts else []),
          "Render and burn subtitles"),
     ]
 

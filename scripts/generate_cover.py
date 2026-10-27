@@ -43,8 +43,85 @@ DEFAULT_HEADLINE = "MUST WATCH"
 # --------------------------------------------------------------------------
 # Frame selection
 # --------------------------------------------------------------------------
-def detect_faces(image_path: str) -> List[Dict]:
-    """Haar frontal-face boxes in SOURCE pixel space."""
+def _haar_faces(gray, scales, cascades, min_size_px, min_neighbors,
+                mirror=False):
+    """Run Haar cascades over several image scales; return SOURCE-space boxes.
+
+    ``scales`` are factors applied to the ORIGINAL image before detection --
+    a smaller working image is what makes soft / motion-blurred / low-key
+    faces detectable (downscaling acts as a low-pass filter and the fixed
+    ``minSize`` window then spans proportionally more of the face).
+    Detections are mapped back to source pixels and de-duplicated.
+
+    ``mirror`` additionally runs each cascade on the horizontally flipped
+    image -- only useful for the profile cascade, which fires on one turn
+    direction only. Kept off by default because it doubles the false-positive
+    rate on the frontal cascade.
+    """
+    import cv2
+
+    h, w = gray.shape[:2]
+    out: List[Dict] = []
+    for s in scales:
+        base = gray if s == 1.0 else cv2.resize(
+            gray, (max(1, int(round(w * s))), max(1, int(round(h * s)))),
+            interpolation=cv2.INTER_AREA)
+        min_side = max(8, int(round(min_size_px * s / max(scales))))
+        for cas in cascades:
+            for flip in ((False, True) if mirror else (False,)):
+                work = cv2.flip(base, 1) if flip else base
+                try:
+                    found = cas.detectMultiScale(work, scaleFactor=1.1,
+                                                 minNeighbors=min_neighbors,
+                                                 minSize=(min_side, min_side))
+                except Exception:
+                    continue
+                ww = work.shape[1]
+                for x, y, fw, fh in found:
+                    if flip:
+                        x = ww - x - fw
+                    out.append({"x": int(round(x / s)), "y": int(round(y / s)),
+                                "w": int(round(fw / s)),
+                                "h": int(round(fh / s))})
+    # de-duplicate: drop any box whose centre already sits inside a kept box
+    kept: List[Dict] = []
+    for b in sorted(out, key=lambda z: -(z["w"] * z["h"])):
+        cx, cy = b["x"] + b["w"] / 2.0, b["y"] + b["h"] / 2.0
+        if any(k["x"] <= cx <= k["x"] + k["w"] and k["y"] <= cy <= k["y"] + k["h"]
+               for k in kept):
+            continue
+        kept.append(b)
+    return kept
+
+
+def detect_faces(image_path: str, subject_frac: float = 0.30) -> List[Dict]:
+    """Haar face boxes in SOURCE pixel space.
+
+    Two passes, and the second one only runs when the first finds *nothing*:
+
+    1. the historical frontal pass at full resolution -- unchanged, so every
+       frame the pipeline already handled behaves exactly as before;
+    2. a rescue pass at HALF resolution, accepted only for faces at least
+       ``subject_frac`` of the image's shorter side.
+
+    Why the rescue exists (2026-10-15): the full-resolution pass silently
+    missed the large, dark, three-quarter-profile face on the Kobe cover
+    (728x720 source, ~254px face). ``qa_video.check_cover`` therefore reported
+    ``face_occluded=False`` on a cover whose headline really did sit on the
+    man's chin -- a false PASS, the worst kind. Re-running at half scale finds
+    it (downscaling is a low-pass filter; the fixed ``minSize`` window then
+    spans proportionally more of the face).
+
+    Why the ``subject_frac`` floor: at half scale the same cascade also starts
+    matching people's TORSOS. Measured over the ten covers of that batch, the
+    spurious boxes reach 24% of the shorter side while the Kobe face is 35%,
+    so a 30% floor separates them with margin. Without the floor this change
+    flipped 8 of 10 covers to a bogus "text over face" warning.
+
+    Known limitation: Haar still misses very dark or extreme-profile faces.
+    Treat the occlusion result as a lower bound and keep spot-checking rendered
+    covers by eye -- see SKILL.md.
+    """
     try:
         import cv2
     except ImportError:
@@ -55,12 +132,27 @@ def detect_faces(image_path: str) -> List[Dict]:
         return []
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    face_cascade = cv2.CascadeClassifier(
-        cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5,
-                                          minSize=(30, 30))
-    return [{"x": int(x), "y": int(y), "w": int(fw), "h": int(fh)}
-            for x, y, fw, fh in faces]
+    cascades = []
+    for name in ("haarcascade_frontalface_default.xml",):
+        path = cv2.data.haarcascades + name
+        if os.path.exists(path):
+            cas = cv2.CascadeClassifier(path)
+            if not cas.empty():
+                cascades.append(cas)
+    if not cascades:
+        return []
+
+    full = _haar_faces(gray, scales=[1.0], cascades=cascades,
+                       min_size_px=30, min_neighbors=5)
+    if full:
+        return full
+
+    h, w = gray.shape[:2]
+    floor_px = int(round(min(h, w) * subject_frac))
+    rescue = _haar_faces(gray, scales=[0.5], cascades=cascades,
+                         min_size_px=30, min_neighbors=5)
+    return [b for b in rescue
+            if min(b["w"], b["h"]) >= floor_px and b["w"] < 4 * w]
 
 
 def select_best_frame(frames: List[Dict], video_understanding: Dict,
@@ -263,7 +355,7 @@ def build_spec(headline: str, style: Dict[str, Any], plan: Dict[str, Any],
         style=style,
         headline_max_width=float(style.get("headline_max_width") or 0.96),
         logo_style=style.get("logo_style") or "sticker",
-        layout=style.get("layout") or "safe",
+        layout=style.get("layout") or "",
         canvas_w=int(canvas.get("width") or 1080),
         canvas_h=int(canvas.get("height") or 1920),
     )
@@ -286,6 +378,31 @@ def main():
     ap.add_argument("--sub", help="Grey sub-line (overrides plan)")
     ap.add_argument("--stat", help="Bottom display row, e.g. '48 POINTS' (overrides plan)")
     ap.add_argument("--tagline", help="White caption line (overrides plan)")
+    ap.add_argument("--layout", choices=["safe", "stack", "classic"],
+                    help="Override cover_style.layout: safe = title floats at the "
+                         "top of the band, stack = every row in ONE bottom block")
+    ap.add_argument("--safe-top", type=float,
+                    help="Override cover_style.safe_zone_top_pct (e.g. 0.25)")
+    ap.add_argument("--safe-bottom", type=float,
+                    help="Override cover_style.safe_zone_bottom_pct")
+    ap.add_argument("--sub-color",
+                    help="Override cover_style.sub_color as #RRGGBB (grey by default)")
+    ap.add_argument("--tagline-color",
+                    help="Override cover_style.tagline_color as #RRGGBB (white by default)")
+    ap.add_argument("--block-scale", type=float,
+                    help="Scale the stack block's type (headline/sub/stat/tagline), "
+                         "e.g. 0.8; the brand mark keeps its profile size")
+    ap.add_argument("--stack-inset", type=float,
+                    help="Override cover_style.stack_bottom_inset_pct -- how far the "
+                         "block's bottom sits above the safe-band bottom, x band height "
+                         "(default 0.075; raise it to LIFT the whole block)")
+    ap.add_argument("--drop-rows",
+                    help="Comma-separated stack rows to omit: any of sub,stat,tag")
+    ap.add_argument("--stack-anchor", choices=["bottom", "center", "top", "split"],
+                    help="Where the stack rows sit in the safe band: bottom / "
+                         "center / top keep them in one block; split sends the "
+                         "copy rows to the head and the signature to the foot "
+                         "(default bottom)")
     ap.add_argument("--cover-image", help="Use user-provided cover image directly (skips frame selection and rendering)")
     ap.add_argument("--no-resize", action="store_true",
                     help="When using --cover-image, keep original size (do not resize to 1080x1920)")
@@ -299,6 +416,37 @@ def main():
 
     profile = load_profile(args.profile)
     cover_style = profile.get("cover_style", {}) or {}
+    if getattr(args, "layout", None):
+        cover_style = dict(cover_style)
+        cover_style["layout"] = args.layout
+    if getattr(args, "safe_top", None) is not None:
+        cover_style = dict(cover_style)
+        cover_style["safe_zone_top_pct"] = args.safe_top
+    if getattr(args, "safe_bottom", None) is not None:
+        cover_style = dict(cover_style)
+        cover_style["safe_zone_bottom_pct"] = args.safe_bottom
+    for flag, key in (("sub_color", "sub_color"),
+                      ("tagline_color", "tagline_color")):
+        raw = getattr(args, flag, None)
+        if raw:
+            h = raw.lstrip("#")
+            if len(h) != 6:
+                raise SystemExit(f"--{flag.replace('_', '-')} expects #RRGGBB, got {raw!r}")
+            cover_style = dict(cover_style)
+            cover_style[key] = [int(h[i:i + 2], 16) for i in (0, 2, 4)]
+    if getattr(args, "block_scale", None):
+        cover_style = dict(cover_style)
+        cover_style["block_scale"] = args.block_scale
+    if getattr(args, "stack_inset", None) is not None:
+        cover_style = dict(cover_style)
+        cover_style["stack_bottom_inset_pct"] = args.stack_inset
+    if getattr(args, "drop_rows", None):
+        cover_style = dict(cover_style)
+        cover_style["drop_rows"] = [k.strip() for k in args.drop_rows.split(",")
+                                    if k.strip()]
+    if getattr(args, "stack_anchor", None):
+        cover_style = dict(cover_style)
+        cover_style["stack_anchor"] = args.stack_anchor
     cover_path = output_path(args.output_dir, "cover.jpg")
     plan_path = args.cover_plan or work_path(args.work_dir, "cover-plan.json")
 

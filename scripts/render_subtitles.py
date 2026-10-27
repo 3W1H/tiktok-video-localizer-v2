@@ -26,24 +26,11 @@ from common import (
 STATIC_CATEGORIES = ("title", "watermark", "logo", "slogan")
 
 
-def generate_srt(timeline: Dict, output_path: str, plan: Dict = None) -> int:
-    """从 timeline.json 生成 SRT 文件
-
-    Fixes (2026-09-26):
-      - static overlays (title / watermark / slogan) used to be written into the
-        SRT with a bogus 0-3s window, duplicating on-screen titles as subtitles;
-        they are now filtered out via localization-plan.json categories.
-      - overlapping source windows used to produce stacked timestamps; windows are
-        now trimmed so no two cues overlap.
-    """
-    entries = timeline.get("entries", [])
-    if not entries:
-        log.warning("No timeline entries for SRT generation")
-        return 0
-
+def _collect_rows(timeline: Dict, plan: Dict = None) -> List:
+    """从 timeline entries 收集字幕行（排除 static、无文本项）"""
     items = (plan or {}).get("items", [])
     rows = []
-    for e in entries:
+    for e in timeline.get("entries", []):
         idx = e.get("index")
         if items and idx is not None and idx < len(items):
             if items[idx].get("category") in STATIC_CATEGORIES:
@@ -59,6 +46,23 @@ def generate_srt(timeline: Dict, output_path: str, plan: Dict = None) -> int:
             if end <= start:
                 end = start + 2
         rows.append([start, end, text])
+    return rows
+
+
+def generate_srt(timeline: Dict, output_path: str, plan: Dict = None) -> int:
+    """从 timeline.json 生成 SRT 文件
+
+    Fixes (2026-09-26):
+      - static overlays (title / watermark / slogan) used to be written into the
+        SRT with a bogus 0-3s window, duplicating on-screen titles as subtitles;
+        they are now filtered out via localization-plan.json categories.
+      - overlapping source windows used to produce stacked timestamps; windows are
+        now trimmed so no two cues overlap.
+    """
+    entries = timeline.get("entries", [])
+    if not entries:
+        log.warning("No timeline entries for SRT generation (empty SRT)")
+    rows = _collect_rows(timeline, plan)
 
     rows.sort(key=lambda r: (r[0], r[1]))
     for i in range(len(rows) - 1):
@@ -124,15 +128,14 @@ def main():
     timeline_path = args.timeline or work_path(args.work_dir, "timeline.json")
     timeline = load_json(timeline_path, {})
 
-    if not timeline.get("entries"):
-        log.error(f"No entries in timeline: {timeline_path}")
-        sys.exit(1)
-
-    # 生成 SRT
+    # 生成 SRT（无 entries 也写空文件：四件套要求 SRT 恒存在，
+    # 纯原声视频本就没有可翻译文字，空 SRT 是正确语义）
     plan_path = work_path(args.work_dir, "localization-plan.json")
     plan = load_json(plan_path, {}) if os.path.exists(plan_path) else {}
     srt_path = output_path(args.output_dir, "subtitles-en.srt")
     count = generate_srt(timeline, srt_path, plan)
+    if not timeline.get("entries"):
+        log.warning(f"No entries in timeline: {timeline_path} (empty SRT written)")
     log.info(f"SRT generated: {srt_path} ({count} entries)")
 
     # 烧录字幕

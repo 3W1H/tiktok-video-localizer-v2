@@ -259,6 +259,13 @@
       "watermark_region_recheck": "clean",
       "review_items_pending": 1,
       "timeline_unresolved": 0
+    },
+    "opening_frame": {
+      "status": "pass",
+      "detail": "第 0 帧是正片画面，无片头卡",
+      "opening_static": false,
+      "opening_static_delta": 38.78,
+      "frame0_vs_cover_mae": 63.06
     }
   },
   "degradations": [

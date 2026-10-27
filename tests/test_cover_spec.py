@@ -31,7 +31,8 @@ SCRIPTS = os.path.join(ROOT, "scripts")
 sys.path.insert(0, SCRIPTS)
 
 from cover_engine import (  # noqa: E402
-    GOLD, CoverSpec, letter_cover, profile_cover_style, render_cover, resolve,
+    GOLD, STACK_BRAND_LEAD, CoverSpec, letter_cover, profile_cover_style,
+    render_cover, resolve,
 )
 
 PROFILES = ("nba", "sports", "generic")
@@ -77,6 +78,14 @@ def boxes_of(meta):
     return b
 
 
+def brand_gap(gaps):
+    """The gap that precedes the signature row, whatever precedes it."""
+    for k, g in gaps.items():
+        if k.endswith("->logo"):
+            return g
+    raise AssertionError(f"no row precedes the signature: {sorted(gaps)}")
+
+
 def out_of_band(meta):
     z = meta["safe_text_zone"]
     y0, y1 = z["y"], z["y"] + z["h"]
@@ -115,9 +124,14 @@ def test_rendered_sizes_match_the_profile():
         spec = spec_for(name)
         meta = render_cover(synthetic_frame(), spec).meta
         if style.get("font_size"):
-            assert meta["sizes"]["headline"] == int(style["font_size"]), (
+            # `block_scale` scales the title block (2026-10-15). The brand row
+            # deliberately does NOT participate -- it is a signature, not a row.
+            scale = float(style.get("block_scale") or 1.0)
+            want = max(40, int(round(int(style["font_size"]) * scale)))
+            assert meta["sizes"]["headline"] == want, (
                 f"{name}: drew headline {meta['sizes']['headline']}px, "
-                f"profile says {style['font_size']}")
+                f"profile says {style['font_size']} x block_scale {scale} = "
+                f"{want}px")
         if style.get("brand_size"):
             assert meta["sizes"]["brand"] == int(style["brand_size"]), (
                 f"{name}: drew brand {meta['sizes']['brand']}px, "
@@ -190,7 +204,14 @@ def test_safe_band_matches_the_profile():
 
 
 def test_brand_sits_in_the_lower_half():
-    """8.1: the brand mark belongs at the BOTTOM. It was once drawn at the top."""
+    """8.1: the brand mark belongs at the BOTTOM. It was once drawn at the top.
+
+    2026-10-15, third pass: the block became TOP-anchored (`stack_anchor: top`)
+    so the whole text block clears the profile-grid edge. That lifts the brand
+    ink's CENTRE to about the band midpoint, so the invariant is stated on the
+    ink's BOTTOM edge -- the signature must still land in the lower half -- plus
+    a floor that stops it drifting up into the top third with the title block.
+    """
     for name in PROFILES:
         if not profile_cover_style(name).get("brand_text"):
             print(f"  {name}: no brand_text configured, skipped")
@@ -200,10 +221,112 @@ def test_brand_sits_in_the_lower_half():
         assert br, f"{name}: brand region missing though brand_text is configured"
         z = meta["safe_text_zone"]
         mid = z["y"] + z["h"] / 2
-        assert br["y"] + br["h"] / 2 > mid, (
-            f"{name}: brand mark centre {br['y'] + br['h'] / 2} is above the band "
-            f"midpoint {mid} -- it must stay at the bottom (SKILL.md 8.1)")
-        print(f"  {name}: brand centre {br['y'] + br['h'] / 2:.0f} > mid {mid:.0f}")
+        assert br["y"] + br["h"] > mid, (
+            f"{name}: brand ink bottom {br['y'] + br['h']} is above the band "
+            f"midpoint {mid} -- it must stay in the lower half (SKILL.md 8.1)")
+        floor = z["y"] + z["h"] * 0.35
+        assert br["y"] + br["h"] / 2 > floor, (
+            f"{name}: brand centre {br['y'] + br['h'] / 2} crept above {floor:.0f} "
+            "-- the signature is drifting up with the title block")
+        print(f"  {name}: brand ink bottom {br['y'] + br['h']:.0f} > mid {mid:.0f}")
+
+
+def test_stack_layout_keeps_the_copy_together():
+    """8.4: nba renders `stack` -- the copy rows stay together, and BOTH ends of
+    the band get a real margin.
+
+    History (2026-10-15), four passes in one day:
+      1. `safe` split the copy into two groups and left the brand **11px** off the
+         bottom edge -- 「封面上的文字怎么都变成了上下呢，下方的 logo 和文字
+         混在一起」.
+      2. `stack` in one bottom-anchored block -- 「标题太靠下了」.
+      3. block lifted to the head of the band -- 「框里中间的小字是什么」.
+      4. copy heads the band, the signature foots it (`stack_anchor: split`) --
+         「logo 怎么往上提了呢，还是要标题在上，logo 在下呢」.
+    So the assertions are now anchor-aware: the copy rows always keep the tight
+    rhythm, and the anchor decides where the mark goes.
+    """
+    name = "nba"
+    style = profile_cover_style(name)
+    assert style.get("layout") == "stack", (
+        f"{name}: expected layout 'stack' (SKILL.md 8.4), got "
+        f"{style.get('layout')!r}")
+    meta = render_cover(synthetic_frame(), spec_for(name)).meta
+    assert meta["layout"] == "stack", (
+        f"meta reports layout {meta['layout']!r} -- stack fell through to safe")
+    rows = meta["text_regions"]
+    kinds = [r["kind"] for r in rows]
+    drop = set(style.get("drop_rows") or ())
+    want = [k for k in ("headline", "sub", "stat", "tag", "logo")
+            if k not in drop]
+    assert kinds == want, (
+        f"the single block must read {'/'.join(want)} (drop_rows={sorted(drop)}), "
+        f"got {kinds}")
+    for r in rows:
+        assert abs(r["x"] + r["w"] / 2 - 540) <= 2, (
+            f"{r['kind']} is off-centre: cx={r['x'] + r['w'] / 2}")
+    z = meta["safe_text_zone"]
+    assert meta["safe_ok"], (
+        f"the block must stay in the band: composition {meta['composition']} "
+        f"vs {z['y']}-{z['y'] + z['h']}")
+    clear = z["y"] + z["h"] - meta["composition"]["bottom"]
+    assert clear >= 60, (
+        f"block bottom is only {clear}px above the band bottom -- the brand "
+        "must not hug the profile-grid edge (the 2026-10-15 bug left 11px)")
+    # Two gap rules, because the block has two kinds of row.
+    #
+    # Content rows (headline / sub / stat / tag) keep the tight block rhythm:
+    # no gap there may open up wide enough to read as a second group. The old
+    # rule keyed on the sub->stat break being the widest, which stopped applying
+    # once `drop_rows: [sub]` removed that row (2026-10-15, third pass).
+    #
+    # The signature is the ONE deliberate exception: it is not a content row but
+    # a mark, so the `->logo` gap is governed by the anchor, not by the rhythm.
+    gaps = {}
+    for a, b in zip(rows, rows[1:]):
+        gaps[f"{a['kind']}->{b['kind']}"] = b["y"] - (a["y"] + a["h"])
+    ceiling = z["h"] * 0.09
+    anchor = style.get("stack_anchor") or "bottom"
+    for k, g in gaps.items():
+        if k.endswith("->logo") and anchor == "split":
+            continue                      # pinned to the band foot, checked below
+        assert g <= ceiling, (
+            f"{k} gap is {g}px (ceiling {ceiling:.0f}px) -- wide enough to read "
+            "as a second group again")
+    inset = z["h"] * float(style.get("stack_bottom_inset_pct") or 0.075)
+    if anchor == "split":
+        # copy heads the band, mark foots it, same margin at both ends
+        logo = next(r for r in rows if r["kind"] == "logo")
+        assert abs(rows[0]["y"] - (z["y"] + inset)) <= 20, (
+            f"the copy starts {rows[0]['y'] - z['y']}px below the band top but "
+            f"the profile inset says {inset:.0f}px")
+        assert abs((logo["y"] + logo["h"]) - (z["y"] + z["h"] - inset)) <= 20, (
+            f"the signature ink ends {z['y'] + z['h'] - logo['y'] - logo['h']}px "
+            f"above the band bottom but the profile inset says {inset:.0f}px -- "
+            "with split the mark must be a footer, not the copy's last line")
+    else:
+        brand_lead = z["h"] * STACK_BRAND_LEAD
+        assert abs(brand_gap(gaps) - brand_lead) <= 15, (
+            f"the lead above the signature is {brand_gap(gaps)}px but the engine "
+            f"says {brand_lead:.0f}px -- the signature must sit the same distance "
+            "below the block on every cover, whatever the stat wraps to")
+    print(f"  {name}: anchor={anchor} {meta['composition']}, gaps {gaps}, "
+          f"clear {clear}px -> OK")
+
+
+def test_safe_layout_still_renders_two_groups():
+    """The old `safe` layout must keep working -- it is the documented fallback
+    (`generate_cover.py --layout safe`) for covers the user wants two-group."""
+    style = profile_cover_style("nba")
+    meta = render_cover(synthetic_frame(),
+                        spec_for("nba", layout="safe")).meta
+    rows = meta["text_regions"]
+    kinds = [r["kind"] for r in rows]
+    assert kinds == ["headline", "sub", "stat", "tag", "logo"], kinds
+    # first row is the floating title, not a stacked one
+    assert rows[0]["y"] < rows[2]["y"], "safe layout must put the title on top"
+    assert meta["safe_ok"], f"safe layout overflowed: {meta['composition']}"
+    print(f"  safe: composition {meta['composition']} (fallback OK)")
 
 
 def test_safe_band_is_the_platform_intersection():
@@ -251,10 +374,13 @@ def test_long_title_wraps_without_shrinking():
     style = profile_cover_style("nba")
     spec = spec_for("nba", headline="KOBE BRYANT 81 POINT GAME", sub="", stat="81 POINTS")
     meta = render_cover(synthetic_frame(), spec).meta
-    assert meta["sizes"]["headline"] == int(style["font_size"]), (
+    scale = float(style.get("block_scale") or 1.0)
+    want = max(40, int(round(int(style["font_size"]) * scale)))
+    assert meta["sizes"]["headline"] == want, (
         f"long title shrank to {meta['sizes']['headline']}px -- it should wrap "
-        f"and keep {style['font_size']}px (SKILL.md 8.2)")
-    assert len(meta["headline_lines"]) >= 1
+        f"and keep {want}px (font_size x block_scale; SKILL.md 8.2)")
+    assert len(meta["headline_lines"]) >= 2, (
+        "a title this long must actually wrap, not fit on one line")
     print(f"  '{' / '.join(meta['headline_lines'])}' at {meta['sizes']['headline']}px")
 
 

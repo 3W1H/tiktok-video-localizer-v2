@@ -72,7 +72,12 @@ _MANUAL_CREDIT_KEYWORDS = ("bensound",)
 _LOCAL_MUSIC_FALLBACK = {
     "artist": "Kevin MacLeod",
     "source": "Incompetech",
-    "license": "CC BY 3.0",
+    # 3.0 → 4.0（2026-10-16 核实）：incompetech.com 的 FAQ 现在统一写
+    # 「Licensed under Creative Commons: By Attribution 4.0」并直接给出
+    # creativecommons.org/licenses/by/4.0 的 PDF 链接。老曲目当年是 3.0 发布的，
+    # CC 授权不可撤销，所以写 3.0 也不算错 —— 但既然版权方现行声明是 4.0，
+    # 兜底就该跟现行声明一致，否则每首新歌都会生成一个过时版本号。
+    "license": "CC BY 4.0",
 }
 
 def load_bgm_library_index() -> Dict[str, Dict[str, Any]]:
@@ -431,21 +436,33 @@ def render_markdown(content: Dict, processing_report: Dict, output_dir: str,
     # 五、推荐背景音乐（具体歌名+艺术家+授权+下载方式）
     lines.append("## 5. BGM Recommendations")
     lines.append("")
-    bgm_recs = content.get("bgm_recommendations", [])
+    # 兼容两种写法：bgm_recommendations（name/artist/style/bpm/licensing/source/
+    # download_url）与 music_recommendation（title/artist/bpm/style/license/why）。
+    bgm_recs = content.get("bgm_recommendations") or content.get("music_recommendation", [])
     if bgm_recs:
         primary = bgm_recs[0] if bgm_recs else {}
-        lines.append(f"⭐ **Primary**: {primary.get('name', 'N/A')}")
-        lines.append(f"   - Artist: {primary.get('artist', 'N/A')}")
-        lines.append(f"   - Style: {primary.get('style', 'N/A')}")
-        lines.append(f"   - BPM: {primary.get('bpm', 'N/A')}")
-        lines.append(f"   - Licensing: {primary.get('licensing', 'N/A')}")
-        lines.append(f"   - Source: {primary.get('source', 'N/A')}")
-        lines.append(f"   - Download: {primary.get('download_url', 'N/A')}")
+
+        def _p(rec, *keys, default="N/A"):
+            for k in keys:
+                v = rec.get(k)
+                if v not in (None, "", []):
+                    return v
+            return default
+
+        lines.append(f"⭐ **Primary**: {_p(primary, 'name', 'title')}")
+        lines.append(f"   - Artist: {_p(primary, 'artist')}")
+        lines.append(f"   - Style: {_p(primary, 'style')}")
+        lines.append(f"   - BPM: {_p(primary, 'bpm', 'bpm_measured')}")
+        lines.append(f"   - Licensing: {_p(primary, 'licensing', 'license')}")
+        lines.append(f"   - Source: {_p(primary, 'source', 'source_url')}")
+        lines.append(f"   - Download: {_p(primary, 'download_url')}")
+        if primary.get("why"):
+            lines.append(f"   - Why: {primary['why']}")
         lines.append("")
         if len(bgm_recs) > 1:
             lines.append("**Alternatives** (rotate to avoid repetition):")
             for i, rec in enumerate(bgm_recs[1:4], 1):
-                lines.append(f"{i}. {rec.get('name', 'N/A')} — {rec.get('artist', '')} | {rec.get('style', '')} | {rec.get('licensing', '')}")
+                lines.append(f"{i}. {_p(rec, 'name', 'title')} — {_p(rec, 'artist', default='')} | {_p(rec, 'style', default='')} | {_p(rec, 'licensing', 'license', default='')}")
             lines.append("")
     else:
         lines.append("No BGM recommendations available.")
@@ -456,6 +473,20 @@ def render_markdown(content: Dict, processing_report: Dict, output_dir: str,
     # 六、发布时间建议（北京时间+美国时间）
     lines.append("## 6. Posting Time (Beijing Time + US Time)")
     lines.append("")
+    # The Agent's per-video slot. post-content.json has carried
+    # best_post_time_bj / best_post_time_et all along, but nothing read them, so
+    # a 10-video batch produced 10 identical generic blocks and the deliberate
+    # spreading of upload slots was thrown away. Surface it when present.
+    _slot_bj = (content.get("best_post_time_bj") or "").strip()
+    _slot_et = (content.get("best_post_time_et") or "").strip()
+    if _slot_bj or _slot_et:
+        lines.append("### This video")
+        lines.append("")
+        if _slot_bj:
+            lines.append(f"- **Beijing**: {_slot_bj}")
+        if _slot_et:
+            lines.append(f"- **US Eastern**: {_slot_et}")
+        lines.append("")
     lines.append("### Best posting times (Beijing Time)")
     lines.append("- **Weekdays**: 19:00 - 22:00 (users relaxing after work)")
     lines.append("- **Weekends**: 14:00 - 18:00 (users leisure time)")

@@ -2,13 +2,14 @@
 """
 qa_video.py - 质量检查
 
-六类检查：
+六类检查 + 首帧门禁：
   1. video:    无黑帧/花屏，时长一致
   2. subtitle: SRT 条目数、时间轴冲突
   3. cover:    人脸/主体未被遮挡
   4. audio:    TTS 轨电平正常（无 amix normalize bug）、片头非静音；中文残留仍需人工 Whisper 抽听（见 §14.8）
   5. localization: 残留中文 OCR 抽检、水印区复检、replace 后 Logo 可见性、review 项汇总
-  6. chinese_residue: 【硬门禁】对 final.mp4 全片 OCR 扫描，检出中文即 FAIL
+  6. opening_frame: 【§11.1】第 0 帧必须是正片画面，不许是标题卡 / logo 卡 / 封面复刻帧
+  7. chinese_residue: 【硬门禁】对 final.mp4 全片 OCR 扫描，检出中文即 FAIL
 
 输出：work/qa.json（PASS / WARNING / FAIL）
 
@@ -100,6 +101,101 @@ def check_video(output_dir: str, work_dir: str) -> Dict:
         "expected_duration": expected_duration,
         "actual_duration": actual_duration,
         "black_frames_detected": black_frames,
+    }
+
+
+def _grab_gray(video: str, ts: float, scratch: str, size=(32, 32)):
+    """抽一帧并缩成 size 的灰度数组；失败返回 None。"""
+    path = os.path.join(scratch, f"open_{int(round(ts * 1000)):06d}.png")
+    run(["ffmpeg", "-y", "-ss", f"{ts:.3f}", "-i", video,
+         "-frames:v", "1", path], check=False)
+    if not os.path.exists(path):
+        return None
+    try:
+        from PIL import Image
+        import numpy as np
+        im = Image.open(path).convert("L").resize(size, Image.LANCZOS)
+        return np.asarray(im, dtype=np.float32)
+    except Exception:
+        return None
+
+
+def check_opening_frame(output_dir: str, work_dir: str) -> Dict:
+    """首帧必须是正片画面（SKILL.md §11.1）
+
+    封面 cover.jpg 已经承载了标题 / 内容简介 / 品牌 logo，视频第 0 帧
+    再放标题卡、logo 卡或封面复刻帧属于重复信息：白占前 1.5 秒、拉低完播率。
+
+    三种判据，任一命中都给 WARNING（不 fail，交由 Agent 目检裁决）：
+      1. `originalize-result.json` 里 `opening_title_card == true`（显式开了 LEGACY 卡）
+      2. 淡入结束后的 0.70–1.35s 画面几乎不变 → 静止卡/logo 卡
+      3. 第 0 帧与 cover.jpg 高度相似 → 封面复刻帧
+    """
+    final_path = os.path.join(output_dir, "final.mp4")
+    if not os.path.exists(final_path):
+        return {"status": "warning", "detail": "final.mp4 not found",
+                "opening_static": None}
+
+    issues: List[str] = []
+
+    # 判据 1：元数据自报
+    orig = load_json(work_path(work_dir, "originalize-result.json"), {})
+    if orig.get("opening_title_card"):
+        issues.append("originalize-result.json 声明 opening_title_card=true"
+                      "（LEGACY 片头卡，违反 §11.1）")
+
+    scratch = tempfile.mkdtemp(prefix="ttl-qa-opening-")
+    f0 = _grab_gray(final_path, 0.0, scratch)
+    # 避开头 0.5s 的淡入（标题卡通常 fade in 0.5s，淡入期内帧差很大，
+    # 拿 0→0.4s 比会漏判）。取淡入结束后的两个点比"是否静止"。
+    f7 = _grab_gray(final_path, 0.70, scratch)
+    f13 = _grab_gray(final_path, 1.35, scratch)
+
+    try:
+        import numpy as np
+    except ImportError:
+        # 没有 numpy/Pillow 时只保留「元数据自报」这一条判据，不阻断 QA
+        np = None
+
+    mean0 = float(f0.mean()) if f0 is not None else None
+    static_delta = None
+
+    # 判据 2：淡入结束后的 0.7–1.35s 是否几乎静止
+    if np is not None and f7 is not None and f13 is not None:
+        static_delta = round(float(abs(f13 - f7).mean()), 2)
+        # 亮度用 f7 判断而不是 f0：标题卡带 fade in，t=0 本来就是全黑，
+        # 拿 f0 当守卫会把片头卡整条放过（黑屏另有 video 检查负责）。
+        luma7 = float(f7.mean())
+        # 正片 0.65s ≈ 18–20 帧，即使慢镜也会明显变化；颗粒底噪约 1–2
+        if static_delta < 2.5 and luma7 >= 5:
+            issues.append(f"0.70–1.35s 画面几乎不变（帧差 {static_delta}），"
+                          "疑似片头标题卡/logo 卡")
+
+    # 判据 3：第 0 帧与封面是否高度相似
+    cover_sim = None
+    cover_path = os.path.join(output_dir, "cover.jpg")
+    if np is not None and f0 is not None and os.path.exists(cover_path):
+        try:
+            from PIL import Image
+            im = Image.open(cover_path).convert("L").resize((32, 32), Image.LANCZOS)
+            c = np.asarray(im, dtype=np.float32)
+            cover_sim = round(float(abs(c - f0).mean()), 2)
+            if cover_sim < 6.0:
+                issues.append(f"第 0 帧与 cover.jpg 高度相似（灰度 MAE {cover_sim}），"
+                              "疑似把封面复刻成了视频首帧")
+        except Exception:
+            pass
+
+    status = "warning" if issues else "pass"
+    detail = "第 0 帧是正片画面，无片头卡" if not issues else "；".join(issues)
+    return {
+        "status": status,
+        "detail": detail,
+        "opening_static": bool(static_delta is not None and static_delta < 2.5),
+        "opening_static_delta": static_delta,
+        "opening_mean_luma": None if mean0 is None else round(mean0, 1),
+        "frame0_vs_cover_mae": cover_sim,
+        "issues": issues,
     }
 
 
@@ -226,6 +322,16 @@ def check_chinese_residue(output_dir: str, work_dir: str,
       ⇒ 规则：`frame_count == 1 and max_confidence < single_frame_min_confidence` 的组不算残留。
       **这条不会削弱任何多帧残留的检出**（真字幕必然多帧），也不会放过高置信的单帧误读。
       验证误报时**必须先抽帧目视确认**，不能凭置信度数字就下结论。
+
+    ⭐ 同字连排 = 图形误读（2026-10-15 新增，窄口径）：
+      真实烧录中文字幕绝不会出现「中中中」这种无意义叠字（中文叠字最多 2 字：
+      天天/慢慢/好好）。而图标、徽标、球衣图形等**重复元素**最典型的 OCR 误读
+      产物恰恰就是「同字连排」。规则：`len(text) >= 3 and len(set(text)) == 1
+      and max_confidence < single_frame_min_confidence`。
+      10 实测：莫兰特 701s 横屏片 57-64s 橙色横幅上 3 个白色手掌图标被读成
+      「中中中」，跨 6 帧 conf 0.53~0.80，因此躲过了上面那条单帧规则；
+      抽帧放大 6x 目视确认是图形。
+      ⇒ **加任何误读规则前都必须先抽帧目视确认**，不许只看置信度数字。
     """
     final_path = os.path.join(output_dir, "final.mp4")
     if not os.path.exists(final_path):
@@ -302,18 +408,41 @@ def check_chinese_residue(output_dir: str, work_dir: str,
         })
     groups.sort(key=lambda g: g["first_sec"])
 
-    # 单帧 + 低置信度 = OCR 误读，不是烧录字幕。见函数 docstring。
+    # 规 1：单帧 + 低置信度 = OCR 误读，不是烧录字幕。见函数 docstring。
     # 真字幕至少持续 ~1s -> 1fps 采样必连续命中；误读通常只落在 1 帧上。
     misreads = [g for g in groups
                 if g["frame_count"] == 1
                 and (g["max_confidence"] or 0) < single_frame_min_confidence]
+    for g in misreads:
+        g["misread_reason"] = "single_frame_low_conf"
+
+    # 规 2（2026-10-15）：**同一字符重复 ≥3 次** = OCR 把「重复的图形」读成了同一个字。
+    #   真实的烧录中文字幕绝不会出现「中中中」这类无意义叠字（中文叠字最多 2 字：
+    #   天天/慢慢/好好），而图标、徽标、球衣、赞助商图形等**重复元素**最典型的
+    #   误读产物恰恰就是这种「同字连排」。
+    #   10 实测（莫兰特 701s 横屏片）57-64s 橙色横幅上 3 个白色手掌图标被读成
+    #   「中中中」；因为跨了 6 帧、conf 0.53~0.80，所以躲过了规 1 —— 抽帧放大 6x
+    #   目视确认是图形而非文字。**加这条规则前必须先抽帧目视确认**，不许只看数字。
+    #   仍保留 conf < single_frame_min_confidence 的约束：03 实测的 13 组真残留
+    #   全部是 conf 0.95+ 的完整句子，不会落进这条规则。
+    repeat_misreads = [g for g in groups
+                       if g not in misreads
+                       and len(g["text"]) >= 3
+                       and len(set(g["text"])) == 1
+                       and (g["max_confidence"] or 0) < single_frame_min_confidence]
+    for g in repeat_misreads:
+        g["misread_reason"] = "repeated_identical_glyph"
+    misreads = misreads + repeat_misreads
+
     if misreads:
         keep = {g["text"] for g in groups if g not in misreads}
         residues = [r for r in residues if r["text"] in keep]
         groups = [g for g in groups if g not in misreads]
-        log.info(f"  剔除 {len(misreads)} 组单帧低置信度误读 "
-                 f"(<{single_frame_min_confidence}): "
-                 + ", ".join(f"{g['text']!r}@{g['first_sec']}s conf={g['max_confidence']:.2f}"
+        log.info(f"  剔除 {len(misreads)} 组 OCR 误读 "
+                 f"(conf<{single_frame_min_confidence}): "
+                 + ", ".join(f"{g['text']!r}@{g['first_sec']}s "
+                             f"conf={g['max_confidence']:.2f} "
+                             f"reason={g['misread_reason']}"
                              for g in misreads))
 
     status = "fail" if residues else "pass"
@@ -323,7 +452,7 @@ def check_chinese_residue(output_dir: str, work_dir: str,
     else:
         detail = f"成品全片 OCR（{len(frames)} 帧 @ {fps}fps）未检出中文"
         if misreads:
-            detail += (f"（已剔除 {len(misreads)} 组单帧低置信度误读："
+            detail += (f"（已剔除 {len(misreads)} 组 OCR 误读："
                        + ", ".join(f"{g['text']!r}@{g['first_sec']}s conf={g['max_confidence']:.2f}"
                                    for g in misreads) + "）")
 
@@ -700,12 +829,13 @@ def main():
 
     log.info("Running QA checks...")
 
-    # 六类检查（第 6 项是硬门禁，独立于 plan 直接验证成品画面）
+    # 七类检查（第 6 项是硬门禁，独立于 plan 直接验证成品画面）
     video_check = check_video(args.output_dir, args.work_dir)
     subtitle_check = check_subtitle(args.output_dir, args.work_dir)
     cover_check = check_cover(args.output_dir, args.work_dir)
     audio_check = check_audio(args.output_dir, args.work_dir)
     localization_check = check_localization(args.output_dir, args.work_dir)
+    opening_check = check_opening_frame(args.output_dir, args.work_dir)
     log.info("  对成品 final.mp4 全片跑中文残留硬门禁（这一步不看 plan，只看画面）...")
     residue_check = check_chinese_residue(args.output_dir, args.work_dir, args.residue_fps,
                                           single_frame_min_confidence=args.residue_single_frame_conf)
@@ -738,7 +868,7 @@ def main():
 
     # 整体状态
     checks = [video_check, subtitle_check, cover_check, audio_check,
-              localization_check, residue_check]
+              localization_check, opening_check, residue_check]
     if any(c["status"] == "fail" for c in checks):
         overall = "FAIL"
     elif any(c["status"] == "warning" for c in checks):
@@ -754,6 +884,7 @@ def main():
             "cover": cover_check,
             "audio": audio_check,
             "localization": localization_check,
+            "opening_frame": opening_check,
             "chinese_residue": residue_check,
         },
         "degradations": degradations,
@@ -768,7 +899,11 @@ def main():
     log.info(f"  Video: {video_check['status']}, Subtitle: {subtitle_check['status']}, "
              f"Cover: {cover_check['status']}, Audio: {audio_check['status']}, "
              f"Localization: {localization_check['status']}, "
+             f"OpeningFrame: {opening_check['status']}, "
              f"ChineseResidue: {residue_check['status']}")
+    if opening_check["status"] == "warning":
+        log.warning(f"  [§11.1] {opening_check['detail']}")
+        log.warning("         成片第 0 帧必须是正片画面：标题/简介/logo 只放 cover.jpg。")
     if residue_check["status"] == "fail":
         log.error("  [!!] 成品中文残留硬门禁未通过，残留清单：")
         for g in residue_check["groups"]:

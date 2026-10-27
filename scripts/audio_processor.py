@@ -20,6 +20,8 @@ audio_processor.py - 音频处理（ASR / TTS / 混音）
                           ⚠️ 原片自身响度不可控（2026-09-28 实测本批素材 I 从 −10.2 到 −13.0 LUFS），
                              同一组参数在不同片子上"领先量"能差 3 倍（实测 +6.7dB vs +2.0dB）→
                              用之前先量原片与 BGM 的 `input_i` 再定 duck.volume_db。详见 SKILL.md §3。
+  tts_keep_instrumental:  demucs 分离去掉中文解说、保留原 BGM/现场声 + 英文 TTS
+                          （2026-10-27 新增，需先备好 work/instrumental.wav，见该分支注释）
 
 ⚠️ 关于 demucs：本机 conda 环境**已装** demucs 4.0.1（htdemucs 权重也在缓存里），
    但它是为「人声 / 伴奏」二分设计，**不能**把「观众现场声」从「音乐」里分出来
@@ -50,7 +52,9 @@ TTS 完全不可用时：静音原轨 + 无配音 + 英文字幕 + BGM → WARNI
 """
 
 import argparse
+import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -288,25 +292,86 @@ def run_tts(work_dir: str, translated_path: str, engine: str = "auto",
 # ============================================================
 # Mix
 # ============================================================
+def bgm_tone_filter(tone: Optional[Dict]) -> str:
+    """把 `audio-plan.json` 的 `bgm.tone` 编译成一条 ffmpeg 滤镜（无配置返回空串）。
+
+    用户 2026-10-16：「要鼓点，鼓不要打铁片的那种声音」—— 抱怨的是 BGM 里的
+    hi-hat / cymbal。镲片是宽带瞬态噪声，能量几乎全在 **6–16 kHz**；而 kick 在
+    40–110 Hz、snare 主体在 150–400 Hz、snare 的脆度在 2–6 kHz，**都不受
+    8 kHz 搁架影响**。所以 `highshelf` 是「只削镲、不削鼓」的精准工具：实测把
+    成品 7–15.5 kHz 能量占比从 5.2% 压到 2.3%（−56%），kick 瞬态计数不变。
+
+    可用键（都在 `bgm.tone` 下）：
+      * `high_shelf_hz` —— 搁架拐点（建议 6000–9000，越低越闷）
+      * `high_shelf_db` —— 增益（负值；−4 轻微、−8 明显、−12 接近闷）
+      * `peak_hz` / `peak_db` / `peak_octaves` —— **峰值均衡**（2026-10-16 新增）。
+        编译成 `equalizer=...:width_type=o:w=<octaves>:g=<db>`。
+
+    ⚠️ **为什么要加峰值均衡：搁架对"宽带镲"不够用**。搁架只能砍拐点**以上**，
+    而实测 08 罗斯用的 `Ready Aim Fire`，其 hi-hat 是**从 1 kHz 一路铺到 16 kHz 的
+    宽带瞬态**（逐 1/3 倍频程瞬态计数：1k=158、2k=187、4k=209、6.3k=214、8k=215 次/分，
+    对照 kick 仅 70 次/分）。8 kHz 搁架 −10 dB 实测只把镲段落压低 **1.41 dB**、
+    **瞬态计数一声没少**（213.8 → 213.8），基本无效。
+    换成 `peak_hz=5000, peak_db=-14, peak_octaves=2.5` 后镲段落 −7.89 dB，
+    而 kick(40–110) −0.04 dB、snare 主体(150–400) −0.09 dB —— 鼓完全没动。
+    选定哪个方案必须**实测扫参数**，不要凭听感猜。
+    """
+    tone = tone or {}
+    out = []
+    try:
+        hz = float(tone.get("high_shelf_hz") or 0)
+        db = float(tone.get("high_shelf_db") or 0)
+    except (TypeError, ValueError):
+        hz, db = 0.0, 0.0
+    if hz > 0 and abs(db) > 0.05:
+        out.append(f"highshelf=f={hz:g}:g={db:g}")
+
+    try:
+        phz = float(tone.get("peak_hz") or 0)
+        pdb = float(tone.get("peak_db") or 0)
+        pw = float(tone.get("peak_octaves") or 0)
+    except (TypeError, ValueError):
+        phz, pdb, pw = 0.0, 0.0, 0.0
+    if phz > 0 and abs(pdb) > 0.05:
+        out.append(f"equalizer=f={phz:g}:width_type=o:w={(pw or 2.0):g}:g={pdb:g}")
+    return ",".join(out)
+
+
 def build_bgm_track(work_dir: str, bgm_asset: str, duration: float,
                     bgm_volume: float, fade_in: float, fade_out: float,
-                    bgm_plan: Optional[Dict] = None) -> str:
+                    bgm_plan: Optional[Dict] = None,
+                    tone: Optional[Dict] = None) -> str:
     """按 `work/bgm-plan.json` 的对齐方案生成 BGM 轨。
 
     ⭐ 2026-09-28 的变化：以前是「从 BGM 第 0 秒平铺到片长」—— BGM 的高潮与视频
-    高潮毫无关系，用户反馈的"节奏对不上、没有高潮起落"就是这个。现在三段式：
+    高潮毫无关系，用户反馈的"节奏对不上、没有高潮起落"就是这个。现在：
 
+      0. 曲首垫片 —— `alignment.head_skip_sec`，输入级 `-ss` **截断**数字静音垫片
       1. `atempo`  —— 把 BGM 的 BPM 拉向视频的剪辑节奏
                       （同时天然完成 §12.4 第 9 条要求的音频指纹变形）
-      2. `atrim=start=<offset>` —— 跳过开头若干秒，使 BGM 的 drop 落在视频的
-                      `rhythm.climax_mid` 上（不是落在视频第 0 秒）
-      3. `aloop`   —— 不够长就循环；衔接点由 `bgm-plan.energy_valley` 给出
-                      （能量低谷），避免在 drop 中间跳回开头把 build-up 切断
+      2. 回卷（rotate）—— `atrim=start=<offset>` 的两段拼接，见下面 build 里的说明
+      3. `aloop` —— 回卷之后的整曲还不够长才循环；循环体是**整曲**，
+                      不是「切剩下的那一段」（旧实现的 bug，见下）
+
+    ⭐⭐ 2026-10-16 的原则：**能零拼接就零拼接**。
+    用户对 09 韦德的原话是「背景音乐怎么也是拼起来的呢，要一首完整的 BGM 不要多段拼凑」。
+    只要「片长 ≤ 曲子的有用段」，就应该**一次连续播放**，`start_offset_sec` 保持 0，
+    绝不为了把一个不存在的「高潮」对上而引入回卷 —— 回卷必然产生一次听得见的缝
+    （切断 + 跳到曲子另一端 + 曲尾静音被搬到片中）。回卷只在「曲子真的比片子短」
+    时才允许。
 
     ⚠️ `atrim` 之后**必须** `asetpts=N/SR/TB` 把时间戳归零：否则后面的 `afade`
        仍按 atrim 之前的时间戳算落点，淡出会跑到错误的位置上。
+
+    ⭐ `tone`（2026-10-16 新增，来自 `audio-plan.json` 的 `bgm.tone`）：音色收敛。
+    用户原话「要鼓点，鼓不要打铁片的那种声音」—— 抱怨的是 BGM 里的 hi-hat /
+    cymbal。镲片是宽带瞬态噪声，能量几乎全在 **6–16 kHz**；而 kick 在 40–110 Hz、
+    snare 主体在 150–400 Hz、snare 的脆度在 2–6 kHz，**都不受 8 kHz 搁架影响**。
+    所以 `highshelf` 是"只削镲不削鼓"的精准工具，实测把成品 7–15.5 kHz 能量占比
+    从 5.2% 压到 2.3%（−56%），kick 瞬态计数不变。
     """
     plan = bgm_plan or {}
+    tone = tone or {}
     filters = []
 
     atempo = float(plan.get("atempo") or 1.0)
@@ -314,26 +379,69 @@ def build_bgm_track(work_dir: str, bgm_asset: str, duration: float,
         # atempo 单次只接受 0.5–2.0；analyze_bgm 已把超出 ±6% 的值拦成 1.0
         filters.append(f"atempo={atempo:.4f}")
 
+    # 起始偏移 = 「从 BGM 的第 offset 秒起播」。
+    #
+    # ⚠️ 2026-10-16 修掉一个能把整条片子毁掉的 bug。旧写法是
+    #     `atrim=start=<offset>` 之后再 `aloop` —— 但 atrim 已经把前面切掉了，
+    #     `aloop` 循环的是**切完之后剩下的那一段**，不是整曲。offset 一旦落在
+    #     曲尾附近，循环体就只剩几秒：同一小段被反复搬运十几遍，而且每次都把
+    #     曲尾的淡出一起带过来。实测 雷阿伦 xWT128：offset=144.12s / 曲长
+    #     155.85s → 11.73s 的片段重复 **13.4 次**，每 11.75s 出现一个 **5.00s
+    #     的静音空洞**，全片 **41% 是静音**（用户：「怎么老是一个调呢，
+    #     而且也不连贯」）。互相关 0.993 证实就是这个拼接方式。
+    #
+    # 正确语义是**回卷（rotate）**：先播 [offset, 曲尾]，再回到 [0, offset] 接着播，
+    # 之后整曲循环。用 `asplit` + 两段 `atrim` + `concat` 显式拼出来，
+    # 这样循环体 = **整曲**，offset 只决定从哪儿进门。
     offset = float((plan.get("alignment") or {}).get("start_offset_sec") or 0.0)
-    if offset > 0.05:
-        filters.append(f"atrim=start={offset:.3f}")
-        filters.append("asetpts=N/SR/TB")
 
-    filters += [
+    # 曲首的数字静音垫片（`alignment.head_skip_sec`）。
+    #
+    # ⚠️ 必须是**输入级 `-ss`（截断）**，不能写成 `-af atrim=start=` + 回卷：
+    #    回卷会把垫片搬到**片尾**去（黑屏那 1 秒变成片尾凭空静音）。
+    #    实测 `Black Vortex` 前 0.83s 低于 −60 dBFS；「从曲首平铺」若照铺，
+    #    叠加默认 2s 淡入后，视频头 2 秒几乎没声。
+    head_skip = float((plan.get("alignment") or {}).get("head_skip_sec") or 0.0)
+    in_args = ["-ss", f"{head_skip:.3f}"] if head_skip > 0.02 else []
+    if in_args:
+        log.info("BGM 跳过曲首垫片 %.3fs（输入级 -ss，截断）", head_skip)
+
+    tail_filters = [
         "aloop=loop=-1:size=2e9",
         f"atrim=0:{duration:.3f}",
         f"volume={bgm_volume}dB",
     ]
+
+    # 音色收敛（去镲）。tone 缺省 = 不改动，保持历史行为。
+    shelf = bgm_tone_filter(tone)
+    if shelf:
+        tail_filters.append(shelf)
+        log.info("BGM 音色收敛：%s（压 hi-hat/cymbals）", shelf)
+
     if fade_in and fade_in > 0:
-        filters.append(f"afade=t=in:st=0:d={fade_in}")
+        tail_filters.append(f"afade=t=in:st=0:d={fade_in}")
     if fade_out and fade_out > 0:
-        filters.append(f"afade=t=out:st={max(0.0, duration - fade_out):.3f}:d={fade_out}")
+        tail_filters.append(f"afade=t=out:st={max(0.0, duration - fade_out):.3f}:d={fade_out}")
 
     bgm_track = work_path(work_dir, "bgm_track.wav")
     log.info("BGM 对齐：atempo=%.4f offset=%.2fs（%s）",
              atempo, offset, (plan.get("alignment") or {}).get("method", "as_is"))
-    run(["ffmpeg", "-y", "-i", bgm_asset, "-af", ",".join(filters),
-         "-t", str(duration), bgm_track])
+
+    if offset > 0.05:
+        pre = (",".join(filters) + ",") if filters else ""
+        graph = (
+            f"[0:a]{pre}asplit=2[rt][rh];"
+            f"[rt]atrim=start={offset:.3f},asetpts=N/SR/TB[rtail];"
+            f"[rh]atrim=end={offset:.3f},asetpts=N/SR/TB[rhead];"
+            f"[rtail][rhead]concat=n=2:v=0:a=1[rot];"
+            f"[rot]{','.join(tail_filters)}[out]"
+        )
+        run(["ffmpeg", "-y", *in_args, "-i", bgm_asset, "-filter_complex", graph,
+             "-map", "[out]", "-t", str(duration), bgm_track])
+    else:
+        run(["ffmpeg", "-y", *in_args, "-i", bgm_asset,
+             "-af", ",".join(filters + tail_filters),
+             "-t", str(duration), bgm_track])
     return bgm_track
 
 
@@ -353,6 +461,58 @@ def _has_audio_stream(path: str) -> bool:
         return bool(out)
     except Exception:
         return False
+
+
+def build_tts_track(entries: List[Dict[str, Any]], work_dir: str,
+                    duration: float) -> tuple:
+    """按 timeline 时间把各条 TTS cue 用 adelay 放到一条轨上。
+
+    返回 (tts_track_path, n_used)。n_used=0 时返回静音底轨（沿用
+    mute_original_tts_bgm 的旧行为）。从 mute_original_tts_bgm 分支抽出共用：
+    tts_keep_instrumental（2026-10-27 新增）需要同样的放置逻辑。
+    """
+    # 生成静音底轨
+    silent_base = work_path(work_dir, "silent_base.wav")
+    run([
+        "ffmpeg", "-y", "-f", "lavfi",
+        "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+        "-t", str(duration),
+        silent_base,
+    ])
+    tts_track = work_path(work_dir, "tts_track.wav")
+
+    # 用 ffmpeg adelay 放置每个 TTS
+    # 注意：inputs 从 0 开始编号（没有其他输入源），
+    # 索引必须基于实际添加的输入个数，不能基于 entries 的枚举索引
+    filter_parts = []
+    inputs = []
+    n_inputs = 0
+    for entry in entries:
+        tts_file = entry.get("tts_file")
+        if not tts_file or not os.path.exists(tts_file):
+            continue
+        start_ms = int(entry.get("final_start", 0) * 1000)
+        inputs.extend(["-i", tts_file])
+        filter_parts.append(f"[{n_inputs}:a]adelay={start_ms}|{start_ms}[a{n_inputs}]")
+        n_inputs += 1
+
+    if inputs:
+        # 混合所有 TTS
+        # ⚠️ 必须 normalize=0：amix 默认把每路输入除以输入数，64 条 cue 就是 -36dB，
+        # 整条 TTS 轨会被压到 BGM 底下 20dB，成片听起来"只有 BGM 没有解说"
+        # （2026-09-29 在 03 湖人 OK 上实锤：tts_track mean -57dB / max -36dB = 1/64）。
+        # TTS cue 互不重叠，unity gain 相加是正确语义。
+        mix_inputs = "".join(f"[a{i}]" for i in range(n_inputs))
+        filter_str = ";".join(filter_parts) + f";{mix_inputs}amix=inputs={n_inputs}:duration=longest:normalize=0[tts_out]"
+        run([
+            "ffmpeg", "-y", *inputs,
+            "-filter_complex", filter_str,
+            "-map", "[tts_out]",
+            tts_track,
+        ])
+    else:
+        run(["cp", silent_base, tts_track])
+    return tts_track, n_inputs
 
 
 def run_mix(video_path: str, work_dir: str, output_dir: str,
@@ -386,21 +546,48 @@ def run_mix(video_path: str, work_dir: str, output_dir: str,
     warnings = []
 
     def _normalize_loudness(path: str) -> None:
-        """响度归一化（就地覆盖）。
+        """响度归一化到 −16 LUFS（就地覆盖）。
 
         ⚠️ 用 shutil.copyfile 而不是 `mv`：本机文件策略把「覆盖已存在目标」的 rename
         判为 file-unlink 并直接拒绝（exit 13, "Brokered host rename source refused
         by file policy"）。用 copyfile（O_TRUNC 覆写，不是 unlink）替代；
         normalized 作为中间产物保留。
+
+        ⚠️⚠️ 必须**两遍**（2026-10-16 修正）。单遍 = loudnorm 的 dynamic 模式，
+        它会**欠调**：实测 Harmful or Fatal（input_lra 16.7）只补了 +8.6 dB，
+        目标 −16 只做到 −24。这不是参数问题 —— 动态模式在大动态素材上本就
+        到不了目标。先用第一遍量出 measured_*，第二遍给 linear 增益一次到位。
+        两遍都在同一份 mixed_audio.wav 上量/做，所以与分支无关。
         """
         if not audio_plan.get("loudness_normalized", True):
             return
         normalized = work_path(work_dir, "mixed_audio_normalized.wav")
-        run([
-            "ffmpeg", "-y", "-i", path,
-            "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
-            normalized,
-        ])
+        target = "I=-16:TP=-1.5:LRA=11"
+        af = f"loudnorm={target}"
+        probe = run(["ffmpeg", "-hide_banner", "-nostats", "-i", path,
+                     "-af", f"loudnorm={target}:print_format=json",
+                     "-f", "null", "-"], check=False)
+        m = re.search(r'\{[^{}]*"input_i"[^{}]*\}', probe.stderr or "", re.S)
+        if m:
+            try:
+                s = json.loads(m.group(0))
+                # measured_thresh 是第一遍的**门限**，第二遍要原样喂回去；
+                # 缺了它 linear 模式会自己再猜一次，结果又飘掉。
+                af = (f"loudnorm={target}"
+                      f":measured_I={s['input_i']}"
+                      f":measured_TP={s['input_tp']}"
+                      f":measured_LRA={s['input_lra']}"
+                      f":measured_thresh={s['input_thresh']}"
+                      f":offset={s['target_offset']}"
+                      ":linear=true")
+            except (ValueError, KeyError) as exc:
+                log.warning("loudnorm 第一遍解析失败（%s），退回单遍", exc)
+        else:
+            log.warning("loudnorm 第一遍没有拿到测量值，退回单遍（可能欠调）")
+        # ⚠️ `loudnorm` 内部固定跑在 192 kHz，**不给 -ar 时输出 WAV 就是 192 kHz**
+        #    （实测 38MB/50s，最终还是要被 AAC 降回 44100，纯浪费，且个别编码器
+        #    在 192k 上行为不可预期）。这里统一压回 44100，与全批成片一致。
+        run(["ffmpeg", "-y", "-i", path, "-af", af, "-ar", "44100", normalized])
         shutil.copyfile(normalized, path)
 
     if strategy == "keep_original":
@@ -434,7 +621,8 @@ def run_mix(video_path: str, work_dir: str, output_dir: str,
         if bgm_used:
             # 按 bgm-plan 对齐（drop -> 视频高潮 / atempo / 能量低谷循环）
             bgm_track = build_bgm_track(work_dir, bgm_used, duration, bgm_volume,
-                                        fade_in, fade_out, bgm_plan)
+                                        fade_in, fade_out, bgm_plan,
+                                        bgm_config.get("tone"))
             run(["cp", bgm_track, mixed_audio])
         else:
             warnings.append("No BGM asset available. Output will have no audio.")
@@ -448,55 +636,20 @@ def run_mix(video_path: str, work_dir: str, output_dir: str,
             ])
             run(["cp", silent_base, mixed_audio])
 
+        # 响度归一化 —— ⚠️ 这一行曾经漏掉（2026-10-16 发现）。
+        # 另外两个分支都有它，只有本分支没有，于是 `loudness_normalized: true`
+        # 在本策略下**被静默忽略**：BGM 只吃到 `volume_db` 的衰减就出厂了。
+        # 实测 03 奥尼尔：成品 −28.0 LUFS（= Metalmania 母带 −9.8 − 18），
+        # 比 `loudnorm=I=-16` 的目标低 12 LU，整批 10 条同样偏低。
+        _normalize_loudness(mixed_audio)
+
     elif strategy == "mute_original_tts_bgm":
         log.info("Strategy: mute_original_tts_bgm - muting original, adding TTS + BGM")
         entries = timeline.get("entries", [])
 
-        # 生成静音底轨
-        silent_base = work_path(work_dir, "silent_base.wav")
-        run([
-            "ffmpeg", "-y", "-f", "lavfi",
-            "-i", f"anullsrc=channel_layout=stereo:sample_rate=44100",
-            "-t", str(duration),
-            silent_base,
-        ])
-
-        # 拼接 TTS（按 timeline 时间放置）
-        tts_concat_list = work_path(work_dir, "tts_concat.txt")
-        tts_track = work_path(work_dir, "tts_track.wav")
-
-        # 用 ffmpeg adelay 放置每个 TTS
-        # 注意：inputs 从 0 开始编号（没有其他输入源），
-        # 索引必须基于实际添加的输入个数，不能基于 entries 的枚举索引
-        filter_parts = []
-        inputs = []
-        n_inputs = 0
-        for entry in entries:
-            tts_file = entry.get("tts_file")
-            if not tts_file or not os.path.exists(tts_file):
-                continue
-            start_ms = int(entry.get("final_start", 0) * 1000)
-            inputs.extend(["-i", tts_file])
-            filter_parts.append(f"[{n_inputs}:a]adelay={start_ms}|{start_ms}[a{n_inputs}]")
-            n_inputs += 1
-
-        if inputs:
-            # 混合所有 TTS
-            # ⚠️ 必须 normalize=0：amix 默认把每路输入除以输入数，64 条 cue 就是 -36dB，
-            # 整条 TTS 轨会被压到 BGM 底下 20dB，成片听起来"只有 BGM 没有解说"
-            # （2026-09-29 在 03 湖人 OK 上实锤：tts_track mean -57dB / max -36dB = 1/64）。
-            # TTS cue 互不重叠，unity gain 相加是正确语义。
-            mix_inputs = "".join(f"[a{i}]" for i in range(n_inputs))
-            filter_str = ";".join(filter_parts) + f";{mix_inputs}amix=inputs={n_inputs}:duration=longest:normalize=0[tts_out]"
-            run([
-                "ffmpeg", "-y", *inputs,
-                "-filter_complex", filter_str,
-                "-map", "[tts_out]",
-                tts_track,
-            ])
-        else:
+        tts_track, n_tts = build_tts_track(entries, work_dir, duration)
+        if n_tts == 0:
             warnings.append("No TTS files available for mixing")
-            run(["cp", silent_base, tts_track])
 
         # BGM
         bgm_config = audio_plan.get("bgm", {})
@@ -508,7 +661,8 @@ def run_mix(video_path: str, work_dir: str, output_dir: str,
             # TTS 场景不做淡入淡出（人声是主体，BGM 突然升降会更突兀），
             # 但对齐仍然生效 —— 让 drop 落在视频高潮上。
             bgm_track = build_bgm_track(work_dir, bgm_used, duration, bgm_volume,
-                                        0.0, 0.0, bgm_plan)
+                                        0.0, 0.0, bgm_plan,
+                                        bgm_config.get("tone"))
             # 混合 TTS + BGM
             run([
                 "ffmpeg", "-y",
@@ -530,6 +684,41 @@ def run_mix(video_path: str, work_dir: str, output_dir: str,
 
         # 响度归一化
         _normalize_loudness(mixed_audio)
+
+    elif strategy == "tts_keep_instrumental":
+        # 2026-10-27 新增：保留原片 BGM/现场声、只去掉中文解说人声，英文 TTS 叠加。
+        # 依赖声源分离（demucs --two-stems=vocals）：底轨 = work/instrumental.wav
+        # （htdemucs 的 no_vocals stem，含原 BGM + 观众/现场声，不含解说人声）。
+        # ⚠️ 分离由 Agent 预先完成（本脚本不内嵌 demucs 调用）：
+        #   python -m demucs --two-stems=vocals -n htdemucs -o <work>/demucs <work>/source_audio.wav
+        #   cp <work>/demucs/htdemucs/source_audio/no_vocals.wav <work>/instrumental.wav
+        # ⚠️ htdemucs 是人声/伴奏二分：观众欢呼声可能部分泄进 vocals stem 丢失，
+        #    属预期代价；入场前应先 ASR 校验 vocals stem 确实是中文解说。
+        instrumental = work_path(work_dir, "instrumental.wav")
+        if not os.path.exists(instrumental):
+            die_degraded(
+                "tts_keep_instrumental: work/instrumental.wav not found. "
+                "Run demucs --two-stems=vocals first and copy no_vocals.wav "
+                "to work/instrumental.wav")
+        log.info("Strategy: tts_keep_instrumental - demucs instrumental + English TTS")
+        entries = timeline.get("entries", [])
+        tts_track, n_tts = build_tts_track(entries, work_dir, duration)
+        if n_tts == 0:
+            warnings.append("No TTS files available for mixing")
+        # 伴奏 pad/trim 到片长，再与 TTS 叠加（normalize=0：两轨电平各自已定）
+        run([
+            "ffmpeg", "-y",
+            "-i", instrumental, "-i", tts_track,
+            "-filter_complex",
+            f"[0:a]aformat=sample_rates=44100:channel_layouts=stereo,"
+            f"apad,atrim=0:{duration}[base];"
+            "[1:a]aformat=sample_rates=44100:channel_layouts=stereo[tts];"
+            "[base][tts]amix=inputs=2:duration=longest:normalize=0[loudness]",
+            "-map", "[loudness]",
+            mixed_audio,
+        ])
+        _normalize_loudness(mixed_audio)
+        bgm_used = "demucs_no_vocals(instrumental.wav)"
 
     elif strategy == "duck_original_add_bgm":
         # 保留原片全部音频（现场声 / 观众欢呼 / 球鞋声 / 原 BGM），整体压到 duck_db，
@@ -564,10 +753,13 @@ def run_mix(video_path: str, work_dir: str, output_dir: str,
                 f"afade=t=in:st=0:d={fade_in},"
                 f"afade=t=out:st={max(0, duration - fade_out)}:d={fade_out}"
             )
+            shelf = bgm_tone_filter(bgm_config.get("tone"))
             run([
                 "ffmpeg", "-y", "-i", bgm_used,
                 "-filter_complex",
-                f"aloop=loop=-1:size=2e9,atrim=0:{duration},volume={bgm_volume}dB,{fade_filter}",
+                f"aloop=loop=-1:size=2e9,atrim=0:{duration},volume={bgm_volume}dB"
+                + (f",{shelf}" if shelf else "")
+                + f",{fade_filter}",
                 "-t", str(duration),
                 bgm_track,
             ])
@@ -597,16 +789,33 @@ def run_mix(video_path: str, work_dir: str, output_dir: str,
     # ⚠️ 优先用**显式传入的 --video**：返工时传的是刚渲染好的 cleaned_v4 之类，
     # 而 work/cleaned.mp4 往往是第一版旧成片 —— 曾经因此把「已改好文案/logo 的视频」
     # 又换回旧画面（2026-09-27）。
+    # ⚠️ 片源选择（2026-10-27 修正）：
+    #  - 显式 --video 指向**非源片**（返修传 cleaned_v4 之类）→ 照旧优先用它；
+    #  - 显式 --video 就是源片（run_pipeline 全新渲染时 clean 尚未跑完，
+    #    job 开始时 cleaned.mp4 还不存在）→ 必须用 work/cleaned.mp4，
+    #    否则 final = 带中文的原片（2026-10-27 超人瞬间实测：QA 67 帧残留）。
     cleaned_video = work_path(work_dir, "cleaned.mp4")
-    if os.path.exists(video_path):
+    if os.path.exists(video_path) and os.path.abspath(video_path) != os.path.abspath(
+            (probe or {}).get("path") or video_path):
+        video_for_mux = video_path
+    elif os.path.exists(cleaned_video):
+        video_for_mux = cleaned_video
+    elif os.path.exists(video_path):
         video_for_mux = video_path
     else:
         video_for_mux = cleaned_video
 
+    # ⚠️ 必须显式 `-map`（2026-10-16 踩坑）。不写 -map 时 ffmpeg 会自动挑流，
+    #    两个输入都带音轨时**优先取更靠前那个输入的音频** —— 于是
+    #    `--video <带音轨的成片>` 返修时，新混的音根本没被用上，成片音轨还是旧的，
+    #    而命令 rc=0、视频流 MD5 也没变，静默骗过所有校验。
+    #    标准 Job2 链路里 `video_for_mux` 是 render_overlays 产出的**无音轨**文件，
+    #    所以一直没暴露；返修场景（--video 直接给成片）必踩。
     run([
         "ffmpeg", "-y",
         "-i", video_for_mux,
         "-i", mixed_audio,
+        "-map", "0:v:0", "-map", "1:a:0",
         "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
         "-shortest",
         final_video,

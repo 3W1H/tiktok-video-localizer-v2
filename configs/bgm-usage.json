@@ -113,11 +113,17 @@
           "output_dir": "/Users/jason/Downloads/tiktok/篮球历史上最全能的大前锋_攻防一体_加内特_xWT157",
           "profile": "nba",
           "used_at": "2026-09-28T14:26:57Z"
+        },
+        {
+          "video": null,
+          "output_dir": "/Users/jason/Downloads/tiktok/科比_03_季后赛一些进攻集锦_科比_xWT156-done",
+          "profile": null,
+          "used_at": "2026-10-16T09:40:02Z"
         }
       ],
-      "count": 1,
+      "count": 2,
       "first_used_at": "2026-09-28T14:26:57Z",
-      "last_used_at": "2026-09-28T14:26:57Z"
+      "last_used_at": "2026-10-16T09:40:02Z"
     },
     "griphop": {
       "display": "Griphop.mp3",
@@ -160,7 +166,189 @@
       "count": 1,
       "first_used_at": "2026-09-28T17:32:06Z",
       "last_used_at": "2026-09-28T17:32:06Z"
+    },
+    "fullon": {
+      "display": "Full On.mp3",
+      "uses": [
+        {
+          "video": "1米8的个子面对2米16的奥尼尔都不怕，像一个战士一样，拼到混身是伤，永不放弃#艾弗森#NBA_xWT126.mp4",
+          "output_dir": "/Users/jason/Downloads/tiktok/1米8的个子面对2米16的奥尼尔都不怕_像一个战士一样_拼到",
+          "profile": "nba",
+          "used_at": "2026-10-14T13:52:44Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-10-14T13:52:44Z",
+      "last_used_at": "2026-10-14T13:52:44Z"
+    },
+    "heroicage": {
+      "display": "Heroic Age.mp3",
+      "uses": [
+        {
+          "video": "1米8的个子面对2米16的奥尼尔都不怕_像一个战士一样_拼到",
+          "output_dir": "/Users/jason/Downloads/tiktok/1米8的个子面对2米16的奥尼尔都不怕_像一个战士一样_拼到",
+          "profile": null,
+          "used_at": "2026-10-15T22:51:54Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-10-15T22:51:54Z",
+      "last_used_at": "2026-10-15T22:51:54Z"
+    },
+    "blackvortex": {
+      "display": "Black Vortex.mp3",
+      "uses": [
+        {
+          "video": "30天30队之热火_韦德生涯高燃扣篮混剪_闪电侠暴力美学扣篮",
+          "output_dir": "/Users/jason/Downloads/tiktok/30天30队之热火_韦德生涯高燃扣篮混剪_闪电侠暴力美学扣篮",
+          "profile": null,
+          "used_at": "2026-10-15T22:51:54Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-10-15T22:51:54Z",
+      "last_used_at": "2026-10-15T22:51:54Z"
+    },
+    "readyaimfire": {
+      "display": "Ready Aim Fire.mp3",
+      "uses": [
+        {
+          "video": "30队巡礼之公牛_罗斯公牛十佳球_永不磨灭的玫瑰印记_七年公",
+          "output_dir": "/Users/jason/Downloads/tiktok/30队巡礼之公牛_罗斯公牛十佳球_永不磨灭的玫瑰印记_七年公",
+          "profile": null,
+          "used_at": "2026-10-15T22:51:54Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-10-15T22:51:54Z",
+      "last_used_at": "2026-10-15T22:51:54Z"
+    },
+    "metalmania": {
+      "display": "Metalmania.mp3",
+      "uses": [
+        {
+          "video": "6场比赛21记扣篮统治内线_03年季后赛奥尼尔西部半决赛对阵",
+          "output_dir": "/Users/jason/Downloads/tiktok/6场比赛21记扣篮统治内线_03年季后赛奥尼尔西部半决赛对阵",
+          "profile": null,
+          "used_at": "2026-10-15T22:51:54Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-10-15T22:51:54Z",
+      "last_used_at": "2026-10-15T22:51:54Z"
+    },
+    "crunkknight": {
+      "display": "Crunk Knight.mp3",
+      "uses": [
+        {
+          "video": "全世界都忘了莫兰特有多强_文班亚马_科比_艾弗森_麦迪_詹姆",
+          "output_dir": "/Users/jason/Downloads/tiktok/全世界都忘了莫兰特有多强_文班亚马_科比_艾弗森_麦迪_詹姆",
+          "profile": null,
+          "used_at": "2026-10-15T22:51:54Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-10-15T22:51:54Z",
+      "last_used_at": "2026-10-15T22:51:54Z"
+    },
+    "fasterdoesit": {
+      "display": "Faster Does It.mp3",
+      "uses": [
+        {
+          "video": "科比_03_季后赛一些进攻集锦_科比_xWT156",
+          "output_dir": "/Users/jason/Downloads/tiktok/科比_03_季后赛一些进攻集锦_科比_xWT156",
+          "profile": null,
+          "used_at": "2026-10-15T22:51:54Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-10-15T22:51:54Z",
+      "last_used_at": "2026-10-15T22:51:54Z"
+    },
+    "rocket": {
+      "display": "Rocket.mp3",
+      "uses": [
+        {
+          "video": "约基奇半场7次助攻合集_妙手连连_不看人妙传助攻戈登篮下轻松",
+          "output_dir": "/Users/jason/Downloads/tiktok/约基奇半场7次助攻合集_妙手连连_不看人妙传助攻戈登篮下轻松",
+          "profile": null,
+          "used_at": "2026-10-15T22:51:54Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-10-15T22:51:54Z",
+      "last_used_at": "2026-10-15T22:51:54Z"
+    },
+    "carefree": {
+      "display": "Carefree.mp3",
+      "uses": [
+        {
+          "video": "隆多的传球藏着顶级球商_视野鬼魅_总能提前预判_把球送到别人",
+          "output_dir": "/Users/jason/Downloads/tiktok/隆多的传球藏着顶级球商_视野鬼魅_总能提前预判_把球送到别人",
+          "profile": null,
+          "used_at": "2026-10-15T22:51:54Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-10-15T22:51:54Z",
+      "last_used_at": "2026-10-15T22:51:54Z"
+    },
+    "fivearmies": {
+      "display": "Five Armies.mp3",
+      "uses": [
+        {
+          "video": "雷阿伦生涯十佳球_NBA_篮球_雷阿伦_十佳球_xWT128",
+          "output_dir": "/Users/jason/Downloads/tiktok/雷阿伦生涯十佳球_NBA_篮球_雷阿伦_十佳球_xWT128",
+          "profile": null,
+          "used_at": "2026-10-15T22:51:54Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-10-15T22:51:54Z",
+      "last_used_at": "2026-10-15T22:51:54Z"
+    },
+    "cutandrun": {
+      "display": "Cut and Run.mp3",
+      "uses": [
+        {
+          "video": "马布里生涯十佳球_NBA_篮球_马布里_十佳球_xWT128",
+          "output_dir": "/Users/jason/Downloads/tiktok/马布里生涯十佳球_NBA_篮球_马布里_十佳球_xWT128",
+          "profile": null,
+          "used_at": "2026-10-15T22:51:55Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-10-15T22:51:55Z",
+      "last_used_at": "2026-10-15T22:51:55Z"
+    },
+    "harmfulorfatal": {
+      "display": "Harmful or Fatal.mp3",
+      "uses": [
+        {
+          "video": null,
+          "output_dir": "/Users/jason/Downloads/tiktok/6场比赛21记扣篮统治内线_03年季后赛奥尼尔西部半决赛对阵",
+          "profile": null,
+          "used_at": "2026-10-15T23:05:47Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-10-15T23:05:47Z",
+      "last_used_at": "2026-10-15T23:05:47Z"
+    },
+    "nightmaremachine": {
+      "display": "Nightmare Machine.mp3",
+      "uses": [
+        {
+          "video": null,
+          "output_dir": "/Users/jason/Downloads/tiktok/雷阿伦生涯十佳球_NBA_篮球_雷阿伦_十佳球_xWT128-done",
+          "profile": null,
+          "used_at": "2026-10-16T10:23:07Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-10-16T10:23:07Z",
+      "last_used_at": "2026-10-16T10:23:07Z"
     }
   },
-  "_updated_at": "2026-09-28T17:32:06Z"
+  "_updated_at": "2026-10-16T10:23:07Z"
 }

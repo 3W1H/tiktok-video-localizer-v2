@@ -99,6 +99,43 @@ categories:
         download_url: "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100453"
         license: "CC BY 3.0"
 
+      # 2026-10-16 补登记：本地 music/sports/Ready Aim Fire.mp3 一直在用，
+      # 但 YAML 里没有条目，generate_post.py 每次都要"兜底推断"并打警告。
+      # ⚠️ 踩坑记录：这首歌的官方乐器栏写的是 "Guitar, Bass, Drums, Organ"（**没有镲**），
+      # 但描述是 "a crazy drummer" —— 实测 hi-hat 高达 214 次/分、hat/kick 比 2.65，
+      # 是全库镲片第二重的曲目（见 reports/library-scan.json）。**别信乐器栏**。
+      - name: "Ready Aim Fire"
+        artist: "Kevin MacLeod"
+        source: "Incompetech"
+        bpm: 172
+        duration: 217
+        style: "rock"
+        mood: "intense"
+        energy: 9
+        download_url: "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1500002"
+        license: "CC BY 4.0"
+
+      # 2026-10-16 补登记：本地 music/sports/Black Vortex.mp3 是 09 韦德扣篮混剪、
+      # 01 奥尼尔等片子实际在用的曲目，但 YAML 里没有条目，generate_post.py 每次都
+      # 要"兜底推断"并打警告。官方元数据（incompetech pieces.json + 曲目页）：
+      #   ISRC USUAN1300037 / 2:50 / 163 BPM / 2026-10-16 核对为 CC BY 4.0
+      #   Attribution code: "Black Vortex" Kevin MacLeod (incompetech.com)
+      #   Licensed under Creative Commons: By Attribution 4.0
+      # ⚠️ 这首是 **7/8 拍**（官方描述 "Orchestral hybrid piece in 7/8 time"），
+      # 所以 beat tracker 的 BPM 读数会飘（analyze_bgm 报过 161.5 "far"）。
+      # 也是本地 37 首里 1–16 kHz 宽带瞬态占比最高的（12.36%），鼓点密但不"炸镲"：
+      # hat/kick = 1.00（对比 Ready Aim Fire 的 2.65）。
+      - name: "Black Vortex"
+        artist: "Kevin MacLeod"
+        source: "Incompetech"
+        bpm: 163
+        duration: 170
+        style: "orchestral-hybrid"
+        mood: "epic"
+        energy: 9
+        download_url: "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1300037"
+        license: "CC BY 4.0"
+
       # 电子类
       - name: "Drive"
         artist: "Kevin MacLeod"
