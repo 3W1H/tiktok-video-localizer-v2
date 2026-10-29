@@ -715,6 +715,15 @@ def compose(frame: Image.Image, spec: CoverSpec,
             img = frame.resize((int(round(src_w * scale)),
                                 int(round(src_h * scale))), Image.LANCZOS)
 
+    # 显式 face_box 但无需放大（win 被全帧封顶）时：水平取景仍应跟随脸
+    # 中心 —— 默认居中把偏一侧的主体切掉半颗头（98全明星同框帧实录：
+    # 乔丹在左缘被裁半头）。
+    if face_win is None and face_box and spec.layout != "classic":
+        fx, fy, fw, fh = face_box
+        fcx = fx + fw / 2.0
+        pic_origin_x = int(round(min(max(fcx * scale - canvas_w / 2.0, 0.0),
+                                     max(0.0, img.size[0] - canvas_w))))
+
     # Trim away the bands that carry burned-in video titles/subtitles so the
     # cover never shows a second copy of the headline or a stray caption.
     ct_lim = as_px(spec.crop_top, 0.195, src_h) * scale

@@ -31,14 +31,33 @@ def main():
         log.info("timeline.json already has entries; skip")
         return
     plan = load_json(work_path(work, "localization-plan.json"), {}) or {}
+    items = plan.get("items", [])
+    # 防御（2026-10-29，98全明星 A1/A2 实测）：Agent 会把视频简介总结文案
+    # 错标成全片窗口（0→187.7s）。这种「伪台词」进 timeline 后，SRT 的重叠
+    # 修剪把它压成 0-0.4s 叠影、成片绘制把它变成全片常驻字幕。
+    # 上游在这里直接剔除：窗口 >= max(60s, 50% 全片跨度) 的 dialogue 一律不进。
+    video_span = max((float(it.get("end_time") or 0) - float(it.get("start_time") or 0)
+                      for it in items), default=0.0)
+    full_span_limit = max(60.0, 0.5 * video_span)
     entries = []
-    for i, it in enumerate(plan.get("items", [])):
+    n_pseudo = 0
+    for i, it in enumerate(items):
         if it.get("category") in STATIC:
             continue
         tgt = it.get("target_text")
         if not tgt:
             continue
+        span = float(it.get("end_time") or 0) - float(it.get("start_time") or 0)
+        if span > full_span_limit:
+            n_pseudo += 1
+            log.warning(
+                f"item[{i}] '{tgt[:30]}...' window {span:.1f}s >= "
+                f"{full_span_limit:.1f}s (summary caption, not timed dialogue) "
+                "- excluded from timeline")
+            continue
         entries.append(_entry(i, it))
+    if n_pseudo:
+        log.warning(f"timeline: dropped {n_pseudo} full-video-window pseudo cue(s)")
 
     # 只有 persistent title 的视频：SRT 也要有内容，回退收录 STATIC 项
     if not entries:

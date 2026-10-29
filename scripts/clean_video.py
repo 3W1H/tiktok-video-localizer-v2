@@ -295,6 +295,24 @@ def clean_with_ffmpeg(video_path: str, masks: List[Dict], out_path: str,
     }
 
 
+def _probe_duration(video_path: str) -> float:
+    """ffprobe 取视频时长（秒），失败返回 0"""
+    try:
+        r = subprocess.run(
+            [_ffprobe_bin(), "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", video_path],
+            capture_output=True, text=True, timeout=20,
+        )
+        return float(r.stdout.strip())
+    except Exception:
+        return 0.0
+
+
+# caption/对白类目的正常台词不会超过 60s；窗口接近全片长说明它是
+# 「整段总结文案」而不是某一刻的台词
+_CAPTION_CATEGORIES = ("caption_overlay", "caption", "dialogue")
+
+
 def render_translated_titles(video_path: str, plan: Dict, out_path: str,
                                frame_w: int, frame_h: int,
                                crf: int = 20, preset: str = "medium") -> Dict:
@@ -311,9 +329,33 @@ def render_translated_titles(video_path: str, plan: Dict, out_path: str,
         if item.get("action") == "translate" and item.get("target_text"):
             translate_items.append(item)
 
+    # 防御（2026-10-29，98全明星实测）：caption 类项若窗口接近全片长度
+    # （>= max(60s, 50% 时长)），它是 Agent 从视频简介/OCR 分组错标出来的
+    # 总结文案，不是可定时台词 —— 全片常驻 drawtext 会压在每一条正常字幕上。
+    # 此类项跳过绘制（原文移除 source_text_removal 不受影响），并记录警告。
+    video_dur = _probe_duration(video_path)
+    kept_items = []
+    skipped_ids = []
+    for item in translate_items:
+        try:
+            span = float(item.get("end_time", 0)) - float(item.get("start_time", 0))
+        except (TypeError, ValueError):
+            span = 0.0
+        if (item.get("category") in _CAPTION_CATEGORIES and video_dur > 0
+                and span >= max(60.0, 0.5 * video_dur)):
+            skipped_ids.append(item.get("item_id"))
+            continue
+        kept_items.append(item)
+    if skipped_ids:
+        log.warning(
+            f"  Skipped {len(skipped_ids)} caption item(s) with full-video window "
+            f"(summary captions, not timed lines): {skipped_ids}"
+        )
+    translate_items = kept_items
+
     if not translate_items:
         run(["ffmpeg", "-y", "-i", video_path, "-c", "copy", out_path])
-        return {"titles_rendered": 0}
+        return {"titles_rendered": 0, "skipped_full_video_captions": skipped_ids}
 
     font_path = find_font()
     if not font_path:
@@ -381,6 +423,7 @@ def render_translated_titles(video_path: str, plan: Dict, out_path: str,
 
     return {
         "titles_rendered": len(translate_items),
+        "skipped_full_video_captions": skipped_ids,
         "font": font_path,
     }
 

@@ -551,6 +551,47 @@ def ocr_clean_cjk(img, conf_threshold: float = 0.5):
     return Image.fromarray(frame), n
 
 
+def wipe_caption_band(img, band):
+    """擦除内容带底部字幕条里的**所有**检出文字（不限语言）。
+
+    选帧来自成片时，字幕带里烧着我们的英文 overlay / 原字幕；plan 的 bbox
+    只覆盖「原文」区域，盖不住整条字幕 —— 98全明星实测：封面左下角露出
+    半截 "Ma"（英文 overlay 比 plan bbox 宽）。字幕带在封面语境里永远
+    不该出现文字，带内 OCR 检出即擦。
+
+    Args:
+        img: PIL RGB Image（全帧坐标，必须在 letterbox 裁剪**之前**调用）
+        band: (top, bottom) 内容带；None 时取全帧底部 16% 当字幕条
+    Returns: (img, n_wiped)
+    """
+    try:
+        import cv2
+        import numpy as np
+        from PIL import Image
+    except ImportError:
+        return img, 0
+    frame = np.asarray(img)
+    h, w = frame.shape[:2]
+    if band:
+        top, bot = band
+    else:
+        top, bot = 0, h
+    strip_top = int(bot - max(46, 0.16 * (bot - top)))
+    n = 0
+    mask = np.zeros((h, w), dtype=np.uint8)
+    for (x0, y0, x1, y1, _text) in _frame_ocr_boxes(frame):
+        if y1 <= strip_top or y0 >= bot:
+            continue  # 与字幕条无交集
+        cv2.rectangle(mask,
+                      (max(0, x0 - 4), max(0, y0 - 4)),
+                      (min(w - 1, x1 + 4), min(h - 1, y1 + 4)), 255, -1)
+        n += 1
+    if n:
+        mask = cv2.dilate(mask, np.ones((9, 9), np.uint8))
+        frame = cv2.inpaint(frame, mask, 5, cv2.INPAINT_TELEA)
+    return Image.fromarray(frame), n
+
+
 def _rebase_frame_paths(frames, work_dir):
     """frames-index 里的绝对路径可能指向改名前的旧目录（如整目录后加 -done）。
 
@@ -842,6 +883,12 @@ def main():
     step = max(1, len(siblings) // 11)
     extra_frames = siblings[::step][:11]
     content_band = detect_content_band(img, extra_frames)
+    # 字幕带清字（2026-10-29）：必须在 letterbox 裁剪之前（全帧坐标）
+    if cover_style.get("clean_frame_enabled", True):
+        img, n_cap = wipe_caption_band(img, content_band)
+        if n_cap:
+            log.info(f"Caption-band wipe removed {n_cap} text region(s) "
+                     "still in the subtitle strip of the cover frame")
     if content_band:
         bt, bb = content_band
         log.info(f"Letterbox detected: footage band y{bt}-{bb} "
@@ -871,8 +918,36 @@ def main():
     spec_face_box = None
     if face_boxes:
         largest = max(face_boxes, key=lambda b: b["w"] * b["h"])
-        spec_face_box = (int(largest["x"]), int(largest["y"]),
-                         int(largest["w"]), int(largest["h"]))
+        # 同框防御（2026-10-29，98全明星用户要求科比+乔丹同框封面）：
+        # 检出多张显著人脸（面积 >= 30% 最大脸）时传「合并框」而不是最大
+        # 单脸 —— 引擎的 face-aware zoom 以合并框中心构图，保住双人/多人
+        # 同框，不会放大成单人特写；合并框大到接近全帧时 zoom 自动退回
+        # 默认取景，群像/观众席行为不变。
+        significant = [b for b in face_boxes
+                       if b["w"] * b["h"] >= 0.30 * largest["w"] * largest["h"]]
+        if len(significant) >= 2:
+            ux = min(b["x"] for b in significant)
+            uy = min(b["y"] for b in significant)
+            uw = max(b["x"] + b["w"] for b in significant) - ux
+            uh = max(b["y"] + b["h"] for b in significant) - uy
+            spec_face_box = (int(ux), int(uy), int(uw), int(uh))
+            log.info(f"Multi-face frame ({len(significant)} significant faces) "
+                     f"-> union face_box {spec_face_box} (keep group composition)")
+        else:
+            spec_face_box = (int(largest["x"]), int(largest["y"]),
+                             int(largest["w"]), int(largest["h"]))
+
+    # 手动 face_box 覆盖（2026-10-29，98全明星实测）：cover-plan.json 顶层
+    # face_box 字段（引擎所见帧坐标 [x,y,w,h]）。Haar 对侧脸/低头脸漏检、
+    # 却把背景里的正脸观众当最大脸时（同框帧实录），用合并框手动指定主体。
+    manual_face_box = plan.get("face_box")
+    if manual_face_box:
+        try:
+            spec_face_box = tuple(int(v) for v in manual_face_box)
+            log.info(f"Manual face_box override from cover-plan: {spec_face_box}")
+        except (TypeError, ValueError):
+            log.warning(f"Invalid manual face_box in cover-plan: "
+                        f"{manual_face_box!r}; ignored")
 
     spec = build_spec(headline, cover_style, plan, args)
     spec.face_box = spec_face_box
@@ -908,7 +983,7 @@ def main():
     render_info["font_used"] = chain[0]
     render_info["font_resolved"] = result.meta["fonts"]["headline"]
 
-    write_plan(plan_path, {
+    out_plan = {
         "profile": args.profile,
         "profile_cover_style": cover_style,
         "canvas": result.meta["canvas"],
@@ -928,7 +1003,14 @@ def main():
         "tagline": spec.tagline,
         "render": render_info,
         "output_path": cover_path,
-    })
+    }
+    # 保留手动 face_box（2026-10-29，98全明星实测）：上面是固定 schema，
+    # 会把 Agent/用户写进 cover-plan 的顶层 face_box 丢掉 —— 出现
+    # 「第一次覆盖生效、跑完写回就消失、下次又检错脸」的隐蔽回退。
+    for _k in ("face_box", "face_box_note"):
+        if _k in plan:
+            out_plan[_k] = plan[_k]
+    write_plan(plan_path, out_plan)
 
     log.info(f"Cover generated: {cover_path}")
     log.info(f"  Headline: '{headline}', Faces: {len(face_areas)}, "

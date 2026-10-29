@@ -293,6 +293,16 @@ def _probe_fps(video: str, fallback: float = 30.0) -> float:
         return fallback
 
 
+def _probe_duration(video: str) -> float:
+    """成片总时长（秒），用于首尾加密采样的窗口定位。"""
+    r = run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", video], check=False)
+    try:
+        return float((r.stdout or "").strip())
+    except Exception:
+        return 0.0
+
+
 def check_chinese_residue(output_dir: str, work_dir: str,
                           fps: float = 1.0, min_confidence: float = 0.5,
                           single_frame_min_confidence: float = 0.9) -> Dict:
@@ -390,6 +400,49 @@ def check_chinese_residue(output_dir: str, work_dir: str,
                     "confidence": det.get("confidence"),
                     "bbox": det.get("bbox"),
                 })
+
+    # 边缘加密（2026-10-29，98全明星实测）：上传者自制收尾卡片常只持续
+    # 0.3-1s（例：187.5-187.9s 的中文致谢卡「致敬科比」）。body 的周期取模
+    # 采样在尾部不满一个周期会整段漏采（1fps@30fps 只取到 187.0s），卡片
+    # 正好从硬门禁的缝隙里溜过去。对首尾各 EDGE 秒用 EDGE_FPS 补扫。
+    EDGE, EDGE_FPS = 2.0, 6.0
+    dur = _probe_duration(final_path)
+    if dur > 0:
+        edge_period = max(1, int(round(src_fps / EDGE_FPS)))
+        edge_jobs = []
+        if dur > EDGE:
+            edge_jobs = [(0.0, "head"), (dur - EDGE, "tail")]
+        else:
+            edge_jobs = [(0.0, "whole")]
+        log.info(f"  边缘加密扫描：首尾各 {EDGE:g}s @ {EDGE_FPS:g}fps "
+                 f"(每 {edge_period} 帧取 1)")
+        for ss, tag in edge_jobs:
+            out_pat = os.path.join(frame_dir, f"edge_{tag}_%05d.jpg")
+            cmd = ["ffmpeg", "-y", "-v", "error"]
+            if ss > 0:
+                cmd += ["-ss", f"{ss:.3f}"]
+            cmd += ["-i", final_path, "-t", f"{EDGE:.3f}",
+                    "-vf", f"select='not(mod(n,{edge_period}))'",
+                    "-vsync", "0", "-q:v", "3", out_pat]
+            run(cmd, check=False)
+            for k, fp in enumerate(sorted(glob.glob(
+                    os.path.join(frame_dir, f"edge_{tag}_*.jpg")))):
+                ts = round(ss + k / EDGE_FPS, 3)
+                try:
+                    dets = ocr_with_rapidocr(fp)
+                except Exception as e:
+                    log.warning(f"  残留检测(边缘) OCR 失败 @ {ts}s: {str(e)[:120]}")
+                    continue
+                for det in dets:
+                    text = (det.get("text") or "").strip()
+                    conf = det.get("confidence") or 0
+                    if text and has_chinese_text(text) and conf >= min_confidence:
+                        residues.append({
+                            "timestamp_sec": ts,
+                            "text": text,
+                            "confidence": det.get("confidence"),
+                            "bbox": det.get("bbox"),
+                        })
 
     # 按文本归组，给出人类可读的区间清单
     grouped_map: Dict[str, List[Dict[str, Any]]] = {}

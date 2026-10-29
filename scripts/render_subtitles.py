@@ -64,7 +64,46 @@ def generate_srt(timeline: Dict, output_path: str, plan: Dict = None) -> int:
         log.warning("No timeline entries for SRT generation (empty SRT)")
     rows = _collect_rows(timeline, plan)
 
+    # 防御（2026-10-29，98全明星实测）：窗口接近全片长度的 cue 是总结文案
+    # （Agent 错标的全片窗口），不是可定时台词 —— 留着会被重叠修剪逻辑压成
+    # 与其他 cue 同起点的 0.4s 叠影。正常台词不会超过 60s，直接剔除。
+    if rows:
+        max_end = max(r[1] for r in rows)
+        limit = max(60.0, 0.5 * max_end)
+        kept = [r for r in rows if r[1] - r[0] <= limit]
+        if len(kept) != len(rows):
+            log.warning(
+                f"SRT: dropped {len(rows) - len(kept)} cue(s) with absurd window "
+                f"(span >= {limit:.1f}s) - summary captions, not timed lines"
+            )
+        rows = kept
+
     rows.sort(key=lambda r: (r[0], r[1]))
+
+    # 防御（2026-10-29，98全明星 A10/A12 实测）：多条 cue 挤在同一个窗口
+    # （同一句话的重复译文/相邻两句同窗口）时，下面的逐条修剪会把它们全部
+    # 压成同起点的 0.4s 叠影。改为把共享窗口按条数均分成先后切片。
+    i = 0
+    while i < len(rows):
+        j = i
+        while (j + 1 < len(rows)
+               and rows[j + 1][0] - rows[i][0] < 0.35
+               and abs(rows[j + 1][1] - rows[i][1]) < 0.60):
+            j += 1
+        if j > i:
+            w_start = min(r[0] for r in rows[i:j + 1])
+            w_end = max(r[1] for r in rows[i:j + 1])
+            step = (w_end - w_start) / (j - i + 1)
+            for k, idx in enumerate(range(i, j + 1)):
+                rows[idx][0] = round(w_start + k * step, 3)
+                rows[idx][1] = round(w_start + (k + 1) * step - 0.02, 3)
+            log.info(f"SRT: split {j - i + 1} cues sharing window "
+                     f"{w_start:.2f}-{w_end:.2f}s into sequential slices")
+            i = j + 1
+        else:
+            i += 1
+
+    # 残余的部分重叠：压掉重叠段（保底 0.4s 可读时长）
     for i in range(len(rows) - 1):
         if rows[i][1] > rows[i + 1][0]:
             rows[i][1] = max(rows[i][0] + 0.4, rows[i + 1][0] - 0.02)
