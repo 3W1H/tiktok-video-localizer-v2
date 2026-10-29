@@ -94,14 +94,17 @@ def _haar_faces(gray, scales, cascades, min_size_px, min_neighbors,
     return kept
 
 
-def detect_content_band(img, min_frac: float = 0.35):
+def detect_content_band(img, extra_frames=None, min_frac: float = 0.30):
     """检测源帧的实际内容区（picture band），返回 (top, bottom) 或 None。
 
     两类源视频版式会把非画面区域裁进封面（2026-10-29 国王/98全明星实录）：
       1. 硬 letterbox：画面只占中部，上下纯黑条 —— 标题压在黑条上
          （国王/麦迪类）；
       2. 模糊背景版式：转载视频自带「模糊背景+中部清晰横条」—— logo 区
-         落在底部暗模糊带上，读作一个大黑框（98全明星类）。
+         落在底部暗模糊带上，读作一个大黑框（98全明星类）。这类版式的
+         模糊背景是**当前画面实时模糊**，跟着内容一起变（时间方差失效）；
+         模糊带上还烧着大号描边字幕，降采样后笔画变宽变强，单帧的行纹理
+         判据把字幕行误判成画面（98 实录：内容带顶部多包了 200px 模糊带）。
 
     两级检测，先 1 后 2（1 无结论才用 2）：
 
@@ -109,13 +112,21 @@ def detect_content_band(img, min_frac: float = 0.35):
     像素都没有；画面行几乎必有高光）。取最大非黑连续段。烧录横幅文字
     虽然亮，但其段远短于画面段，最大段自动胜出。
 
-    Pass 2（模糊带版式）：4x 降采样后逐行算 RMS(Laplacian)（文字笔画在
-    降采样中消失、画面纹理保留），阈值 max(6, 0.40*q75) + 行均亮度 > 45
-    （排掉黑底烧字），不桥接、剔 <12%H 小段、取最大段；仅当段高在
-    40%-85% 帧高之间才采用 —— 满幅/近满幅说明本无模糊带，过短则不可信。
+    Pass 2（模糊带版式，多帧行级中位数）：版式全片固定 —— 画面带行帧帧
+    有纹理、模糊带行帧帧平滑，只有字幕在闪现/更换。对 work 目录均匀抽样
+    ≤12 帧逐行算「中等纹理占比」（4x 降采样，|lap|∈(8,30] 的列占比），
+    取**跨帧中位数**：字幕尖峰被中位数滤掉。阈值 max(0.10, 0.55*p90)，
+    桥接 ≤4%H 缺口（画面内的白墙/天空平滑段）、剔 <12%H 小段（零散字幕
+    岛）、取最大段。
 
-    段高不足 min_frac 或两级都无结论 → None（不裁）。
-    必须在帧清理之后调用（清理抹掉横幅文字后更准）。
+    逐侧平滑门槛（防过度裁切）：候选带上/下方的排除区必须以平滑行为主
+    （中位数 < 0.05 的行 ≥55%）才允许裁那一侧 —— 真模糊带/黑条几乎全平滑，
+    而「全幅画面+底部字幕」类视频（森林狼实录）排除区大半是真实画面，
+    门槛不过就不裁该侧。两侧都不过 → None。
+
+    段高不足 min_frac 或本就是满幅 → None（不裁）。找到带后上下各内收 1%
+    （避开画面↔模糊带的渐变过渡行）。可在帧清理之前调用（中位数天然
+    抗单帧清理痕迹）。
     """
     try:
         import cv2
@@ -143,43 +154,59 @@ def detect_content_band(img, min_frac: float = 0.35):
         if b - t >= h * min_frac and not (t <= 2 and b >= h - 2):
             return (int(t), int(b + 1))
 
-    # --- Pass 2: 模糊背景版式（降采样行清晰度） ---
-    small = img.convert("L").resize((max(1, w // 4), max(1, h // 4)),
-                                    Image.BILINEAR)
-    gs = np.asarray(small, dtype=np.float32)
-    H4 = gs.shape[0]
-    if H4 < 20:
-        return None
-    lap = cv2.Laplacian(gs, cv2.CV_32F)
-    lap_row = np.sqrt((lap ** 2).mean(axis=1))
-    mean_row = gs.mean(axis=1).astype(np.float32)
-    k = 7
-    lap_row = np.convolve(lap_row, np.ones(k) / k, mode="same")
-    mean_row = np.convolve(mean_row, np.ones(k) / k, mode="same")
-    q75 = float(np.percentile(lap_row, 75))
-    thresh = max(6.0, 0.40 * q75)
-    content = (lap_row > thresh) & (mean_row > 45.0)
+    # --- Pass 2: 模糊背景版式（多帧行级中位数） ---
+    paths = [p for p in (extra_frames or []) if p][:11]
+    frames = [img]
+    for p in paths:
+        try:
+            frames.append(Image.open(p))
+        except Exception:
+            continue
+    H4 = max(20, h // 4)
+    mids = []
+    for fr in frames:
+        small = fr.convert("L").resize((max(1, w // 4), H4), Image.BILINEAR)
+        gs = np.asarray(small, dtype=np.float32)
+        lap = np.abs(cv2.Laplacian(gs, cv2.CV_32F))
+        mids.append(((lap > 8) & (lap <= 30)).mean(axis=1))
+    med = np.median(np.stack(mids), axis=0)
+    med = np.convolve(med, np.ones(5) / 5, mode="same")
+    thresh = max(0.10, 0.55 * float(np.percentile(med, 90)))
+    content = med > thresh
     idx = np.where(content)[0]
     if len(idx) == 0:
         return None
+    gap_max = max(2, int(H4 * 0.04))
     runs, s, p = [], idx[0], idx[0]
     for i in idx[1:]:
-        if i - p <= 2:
+        if i - p <= gap_max:
             p = i
         else:
             runs.append((s, p))
             s = p = i
     runs.append((s, p))
-    min_run = int(H4 * 0.12)
-    runs = [r for r in runs if r[1] - r[0] >= min_run]
+    runs = [r for r in runs if r[1] - r[0] >= int(H4 * 0.12)]
     if not runs:
         return None
     t4, b4 = max(runs, key=lambda r: r[1] - r[0])
     t, b = int(t4 * h / H4), int((b4 + 1) * h / H4)
-    frac = (b - t) / h
-    if not (0.40 <= frac <= 0.85):
+
+    # 逐侧平滑门槛：排除区必须以平滑行为主才裁那一侧
+    smooth = med < 0.05
+
+    def bandlike(a4, z4):
+        seg = smooth[a4:z4]
+        return seg.size == 0 or seg.mean() >= 0.55
+
+    if not bandlike(0, t4):
+        t = 0
+    if not bandlike(b4 + 1, H4):
+        b = h
+    if b - t < h * min_frac or (t <= int(h * 0.01) and b >= int(h * 0.99)):
         return None
-    return (t, b)
+    # 内收 1% 避开过渡行
+    trim = max(2, int(h * 0.01))
+    return (min(t + trim, b - 1), max(b - trim, t + 1))
 
 
 def detect_faces(image_path: str, subject_frac: float = 0.30) -> List[Dict]:
@@ -376,6 +403,24 @@ def plan_items_at(plan_items, frame_time, eps=1e-6):
     return out
 
 
+def _frame_ocr_boxes(frame_rgb):
+    """全帧 RapidOCR 检出，返回 [(x0, y0, x1, y1, text)]（源像素坐标）。"""
+    try:
+        import cv2
+        from rapidocr_onnxruntime import RapidOCR
+    except ImportError:
+        return []
+    res, _ = RapidOCR()(cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR))
+    out = []
+    for box, text, conf in (res or []):
+        if conf < 0.4:
+            continue
+        xs = [int(round(p[0])) for p in box]
+        ys = [int(round(p[1])) for p in box]
+        out.append((min(xs), min(ys), max(xs), max(ys), str(text)))
+    return out
+
+
 def clean_frame_with_plan(img, plan_items, frame_time=None, blur_radius=25,
                           blur_alpha=210, inpaint_radius=5):
     """按 localization-plan 清理封面帧上的中文/水印（与视频清理一致）
@@ -389,6 +434,14 @@ def clean_frame_with_plan(img, plan_items, frame_time=None, blur_radius=25,
 
     ``frame_time`` 传入封面帧时间戳后，只有该时刻在屏的项会被清理
     （见 ``plan_items_at``）——否则会把全片的区域都擦到这一帧上。
+
+    ⭐ bbox↔OCR 相交裁剪（2026-10-29 98全明星实录）：translate 项的 bbox
+    经常把**不同时刻出现的两条字幕**框在一起（如 A2 = "他是MVP…" +
+    "致敬科比"，bbox 高 217px 横跨画面区和模糊带），而封面帧上只有一行
+    在屏 —— 旧逻辑整块模糊+82% 黑遮罩，在真实画面上糊出一个大黑框
+    （用户："logo 还有黑框"）。现在先 OCR 全帧，bbox 与实际检出文字
+    **相交才清理、只清相交部分**；OCR 没命中的项（图形/水印类）才退回
+    整块处理。
 
     Returns:
         (清理后的 PIL Image, 清理项计数)
@@ -406,6 +459,7 @@ def clean_frame_with_plan(img, plan_items, frame_time=None, blur_radius=25,
 
     frame = np.array(img.convert("RGB"))
     h, w = frame.shape[:2]
+    ocr_boxes = _frame_ocr_boxes(frame)
     cleaned_count = 0
 
     for item in items:
@@ -419,7 +473,25 @@ def clean_frame_with_plan(img, plan_items, frame_time=None, blur_radius=25,
         if x1 <= x0 or y1 <= y0:
             continue
 
-        if (y1 - y0) > 100:
+        # OCR 相交裁剪：只清 bbox 内实际检出的文字
+        hits = []
+        for (ox0, oy0, ox1, oy1, _t) in ocr_boxes:
+            ix0, iy0 = max(x0, ox0), max(y0, oy0)
+            ix1, iy1 = min(x1, ox1), min(y1, oy1)
+            if ix1 <= ix0 or iy1 <= iy0:
+                continue
+            oarea = max(1, (ox1 - ox0) * (oy1 - oy0))
+            if (ix1 - ix0) * (iy1 - iy0) / oarea >= 0.30:
+                hits.append((ix0, iy0, ix1, iy1))
+
+        if hits:
+            mask = np.zeros((h, w), dtype=np.uint8)
+            for (hx0, hy0, hx1, hy1) in hits:
+                m = max(3, int((hy1 - hy0) * 0.25))
+                mask[max(0, hy0 - m):min(h, hy1 + m),
+                     max(0, hx0 - m):min(w, hx1 + m)] = 255
+            frame = cv2.inpaint(frame, mask, inpaint_radius, cv2.INPAINT_TELEA)
+        elif (y1 - y0) > 100:
             # 大区域：高斯模糊 + 半透明黑遮罩（能看到画面轮廓，非纯黑条）
             roi = frame[y0:y1, x0:x1].copy()
             k = (blur_radius * 2 + 1, blur_radius * 2 + 1)
@@ -758,7 +830,18 @@ def main():
     # Letterbox 裁除：源帧带上下黑条时裁到实际画面区再交给引擎。
     # 必须在帧清理之后（clean/OCR 兜底用的都是全帧坐标）。
     # 黑条进封面 = 标题压纯黑、logo 区大黑框（2026-10-29 国王/98全明星实录）
-    content_band = detect_content_band(img)
+    # 模糊带版式用多帧行级中位数判定 —— 抽选帧同目录的兄弟粗扫帧。
+    sibling_dir = os.path.dirname(selected_frame["path"]) or "."
+    try:
+        siblings = sorted(
+            os.path.join(sibling_dir, f)
+            for f in os.listdir(sibling_dir)
+            if f.lower().endswith((".png", ".jpg")))
+    except OSError:
+        siblings = []
+    step = max(1, len(siblings) // 11)
+    extra_frames = siblings[::step][:11]
+    content_band = detect_content_band(img, extra_frames)
     if content_band:
         bt, bb = content_band
         log.info(f"Letterbox detected: footage band y{bt}-{bb} "
