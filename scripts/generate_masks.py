@@ -120,7 +120,30 @@ def main():
     plan = load_json(plan_path, {})
     probe = load_json(probe_path, {})
 
-    items = plan.get("items", [])
+    items = list(plan.get("items", []))
+
+    # Agent 视检补充的图形残留区域（extra_mask_regions）：
+    # 静态贴片上的非文字图形 —— 箭头、横幅色块、台标、飘带、logo —— OCR 检不出，
+    # 文字 mask 只盖住字，图形会整块残留（2026-10-29 麦迪十佳球：橙色箭头横幅
+    # + YouTube 标黄飘带全程残留）。Agent 看首帧/中部帧后在 plan 里补区域，
+    # 这里合成为 remove item，与文字 mask 同一管线处理。
+    for i, r in enumerate(plan.get("extra_mask_regions", [])):
+        items.append({
+            "item_id": r.get("item_id") or f"XG_{i:02d}",
+            "category": "graphic",
+            "action": "remove",
+            "confidence": 1.0,
+            "bbox": {"x": int(r.get("x", 0)), "y": int(r.get("y", 0)),
+                     "w": int(r.get("w", 0)), "h": int(r.get("h", 0))},
+            "start_time": r.get("start_time", 0),
+            "end_time": r.get("end_time", 0),
+            "source_text": r.get("label", ""),
+            "source_text_removal": True,
+            "removal_method": ["inpaint"],
+        })
+    if plan.get("extra_mask_regions"):
+        log.info(f"  + {len(plan['extra_mask_regions'])} extra graphic regions from plan")
+
     frame_w = probe.get("width", 1080)
     frame_h = probe.get("height", 1920)
 

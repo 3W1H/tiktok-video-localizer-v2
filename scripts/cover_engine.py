@@ -350,6 +350,10 @@ class CoverSpec:
     backdrop_blur: float = 36
     backdrop_dim: float = 0.42
     backdrop_sat: float = 0.55
+    face_box: Optional[Tuple[int, int, int, int]] = None
+    # (x, y, w, h) in FRAME space -- generate_cover detects it (two-pass Haar,
+    # sees large dark close-ups the single-pass here misses) on the exact frame
+    # compose receives and passes it in; engine detection is only the fallback.
     scrim: int = 140
     min_image: float = 0.30
     focus: float = 0.5
@@ -468,6 +472,10 @@ def _largest_verified_face(frame):
     零余量，脸贴着源帧上缘就原样贴到 picture box 顶边、被标题压住。选帧已修
     （占位盲信/路径重接/眼部复核），这里是最后一层 —— 裁切要感知人脸。
     复用 pick_cover_frame 的级联 + 眼部二级验证，避免背影误报。
+
+    ⚠️ 单遍全分辨率 Haar 对「大而暗的特写脸」会漏检（同 detect_faces 注释里
+    Kobe 封面的教训）——调用方应优先用 generate_cover 检测（带半分辨率 rescue）
+    并经 ``spec.face_box`` 传入，这里只作兜底。
     """
     try:
         import cv2
@@ -695,7 +703,7 @@ def compose(frame: Image.Image, spec: CoverSpec,
     # 检出人脸时放大取景：脸占画面高约 30%，中心落在 40% 高度（三分法偏上）。
     # 放大上限 2.2x（防小脸拉出马赛克），窗口有 0.35*src_h 与 2.5*face_h 两道
     # 语境下限；脸已经足够大（win >= 全帧）时自动退回默认取景。
-    face_box = _largest_verified_face(frame)
+    face_box = spec.face_box or _largest_verified_face(frame)
     face_win = None
     if face_box and spec.layout != "classic":
         fx, fy, fw, fh = face_box
@@ -832,7 +840,11 @@ def compose(frame: Image.Image, spec: CoverSpec,
     area = Image.composite(area, black, fade)
 
     # ------------------------------------------------------------- canvas ---
-    if spec.layout == "safe" and spec.backdrop == "blur":
+    # 2026-10-29: backdrop=blur 不再限于 safe 版式 —— stack 版式此前直接落
+    # 纯黑画布，标题/品牌区背景是死黑（用户："标题背景是纯黑色的，要原始
+    # 背景图"、"logo 的黑框太大"）。模糊原帧作底后，文字区透出原始画面
+    # 的暗化模糊版，黑框变成有质感的背景。
+    if spec.backdrop == "blur":
         canvas = build_backdrop(img, spec.backdrop_blur, spec.backdrop_dim,
                                 spec.backdrop_sat, canvas_w, canvas_h)
     else:

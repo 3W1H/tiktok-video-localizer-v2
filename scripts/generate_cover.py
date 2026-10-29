@@ -94,6 +94,94 @@ def _haar_faces(gray, scales, cascades, min_size_px, min_neighbors,
     return kept
 
 
+def detect_content_band(img, min_frac: float = 0.35):
+    """检测源帧的实际内容区（picture band），返回 (top, bottom) 或 None。
+
+    两类源视频版式会把非画面区域裁进封面（2026-10-29 国王/98全明星实录）：
+      1. 硬 letterbox：画面只占中部，上下纯黑条 —— 标题压在黑条上
+         （国王/麦迪类）；
+      2. 模糊背景版式：转载视频自带「模糊背景+中部清晰横条」—— logo 区
+         落在底部暗模糊带上，读作一个大黑框（98全明星类）。
+
+    两级检测，先 1 后 2（1 无结论才用 2）：
+
+    Pass 1（硬黑条，最可靠）：行最大亮度 < 12 即黑条行（纯黑条连一个亮
+    像素都没有；画面行几乎必有高光）。取最大非黑连续段。烧录横幅文字
+    虽然亮，但其段远短于画面段，最大段自动胜出。
+
+    Pass 2（模糊带版式）：4x 降采样后逐行算 RMS(Laplacian)（文字笔画在
+    降采样中消失、画面纹理保留），阈值 max(6, 0.40*q75) + 行均亮度 > 45
+    （排掉黑底烧字），不桥接、剔 <12%H 小段、取最大段；仅当段高在
+    40%-85% 帧高之间才采用 —— 满幅/近满幅说明本无模糊带，过短则不可信。
+
+    段高不足 min_frac 或两级都无结论 → None（不裁）。
+    必须在帧清理之后调用（清理抹掉横幅文字后更准）。
+    """
+    try:
+        import cv2
+        import numpy as np
+        from PIL import Image
+    except ImportError:
+        return None
+    w, h = img.size
+
+    # --- Pass 1: 硬 letterbox（行最大亮度） ---
+    g = np.asarray(img.convert("L"), dtype=np.float32)
+    rowmax = g.max(axis=1)
+    content = rowmax >= 12.0
+    idx = np.where(content)[0]
+    if len(idx):
+        runs, s, p = [], idx[0], idx[0]
+        for i in idx[1:]:
+            if i - p <= 2:
+                p = i
+            else:
+                runs.append((s, p))
+                s = p = i
+        runs.append((s, p))
+        t, b = max(runs, key=lambda r: r[1] - r[0])
+        if b - t >= h * min_frac and not (t <= 2 and b >= h - 2):
+            return (int(t), int(b + 1))
+
+    # --- Pass 2: 模糊背景版式（降采样行清晰度） ---
+    small = img.convert("L").resize((max(1, w // 4), max(1, h // 4)),
+                                    Image.BILINEAR)
+    gs = np.asarray(small, dtype=np.float32)
+    H4 = gs.shape[0]
+    if H4 < 20:
+        return None
+    lap = cv2.Laplacian(gs, cv2.CV_32F)
+    lap_row = np.sqrt((lap ** 2).mean(axis=1))
+    mean_row = gs.mean(axis=1).astype(np.float32)
+    k = 7
+    lap_row = np.convolve(lap_row, np.ones(k) / k, mode="same")
+    mean_row = np.convolve(mean_row, np.ones(k) / k, mode="same")
+    q75 = float(np.percentile(lap_row, 75))
+    thresh = max(6.0, 0.40 * q75)
+    content = (lap_row > thresh) & (mean_row > 45.0)
+    idx = np.where(content)[0]
+    if len(idx) == 0:
+        return None
+    runs, s, p = [], idx[0], idx[0]
+    for i in idx[1:]:
+        if i - p <= 2:
+            p = i
+        else:
+            runs.append((s, p))
+            s = p = i
+    runs.append((s, p))
+    min_run = int(H4 * 0.12)
+    runs = [r for r in runs if r[1] - r[0] >= min_run]
+    if not runs:
+        return None
+    t4, b4 = max(runs, key=lambda r: r[1] - r[0])
+    t, b = int(t4 * h / H4), int((b4 + 1) * h / H4)
+    frac = (b - t) / h
+    if not (0.40 <= frac <= 0.85):
+        return None
+    return (t, b)
+
+
 def detect_faces(image_path: str, subject_frac: float = 0.30) -> List[Dict]:
     """Haar face boxes in SOURCE pixel space.
 
@@ -667,18 +755,56 @@ def main():
             log.info(f"OCR sweep cleaned {n_ocr} leftover CJK region(s) "
                      "plan cleaning missed")
 
+    # Letterbox 裁除：源帧带上下黑条时裁到实际画面区再交给引擎。
+    # 必须在帧清理之后（clean/OCR 兜底用的都是全帧坐标）。
+    # 黑条进封面 = 标题压纯黑、logo 区大黑框（2026-10-29 国王/98全明星实录）
+    content_band = detect_content_band(img)
+    if content_band:
+        bt, bb = content_band
+        log.info(f"Letterbox detected: footage band y{bt}-{bb} "
+                 f"(bars {bt}px top / {img.height - bb}px bottom); "
+                 "cropping frame to content")
+        img = img.crop((0, bt, img.width, bb))
+        # 内容带已排除黑条/模糊带/烧录标题带，引擎的 crop_top/crop_bottom
+        # （为躲烧字设计的 0.195/0.70）不再需要那么保守，放宽以免白白
+        # 裁掉真画面
+        spec_crop_top = min(float(cover_style.get("crop_top", 0.195)), 0.08)
+        spec_crop_bottom = max(float(cover_style.get("crop_bottom", 0.70)), 0.92)
+        cover_style = dict(cover_style)
+        cover_style["crop_top"] = spec_crop_top
+        cover_style["crop_bottom"] = spec_crop_bottom
+
+    # 人脸检测一次，引擎与 QA 共用：在最终交给引擎的帧上（已清理/已裁内容带）
+    # 用两遍 Haar（全分辨率 + 半分辨率 rescue）检测 —— 引擎内部的单遍检测
+    # 对大而暗的特写脸会漏检（Kobe/国王 close-up 实录），导致 face-aware
+    # 裁切失效、脸被切在画面上缘。
+    cover_frame_path = work_path(args.work_dir, "cover-frame.png")
+    try:
+        img.save(cover_frame_path)
+    except Exception as e:  # 落盘失败不阻塞，引擎退回内部检测
+        log.warning(f"cover-frame.png save failed: {e}")
+        cover_frame_path = selected_frame["path"]
+    face_boxes = detect_faces(cover_frame_path)
+    spec_face_box = None
+    if face_boxes:
+        largest = max(face_boxes, key=lambda b: b["w"] * b["h"])
+        spec_face_box = (int(largest["x"]), int(largest["y"]),
+                         int(largest["w"]), int(largest["h"]))
+
     spec = build_spec(headline, cover_style, plan, args)
+    spec.face_box = spec_face_box
     result = render_cover(img, spec)
     result.image.save(cover_path, "JPEG", quality=95)
     print(format_report(spec, result.meta, cover_path, args.profile))
 
-    # faces are detected in SOURCE space, then mapped through the same
-    # transform the engine applied to the picture, so the QA occlusion check
-    # compares like with like
+    # faces 已在最终帧（work/cover-frame.png）上检测，坐标即引擎所见帧空间，
+    # 直接经 picture_src 变换到画布，QA 遮挡检查即可 like-for-like
     face_areas = map_boxes_to_canvas(
-        detect_faces(selected_frame["path"]), result.meta["picture_src"])
+        face_boxes, result.meta["picture_src"])
 
     render_info = dict(result.meta)
+    render_info["content_band"] = (list(content_band)
+                                   if content_band else None)
     render_info["faces_detected"] = len(face_areas)
     render_info["face_areas"] = face_areas
     render_info["frame_cleaned_regions"] = cleaned_count

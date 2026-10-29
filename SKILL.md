@@ -2343,6 +2343,22 @@ The Path of the Goblin King / Wallpaper(+v2)）。
   `prepare_plan.py` / 计划构建脚本支持 `extra_items_file`（一个 JSON，内容是 items 数组），
   脚本把草稿与它合并。适用于"OCR 检不出但你知道该清/该画"的项（误读框、片头真中文、补画的 logo）。
   （本批实现：`tiktok-batch/plan_builder.py`。）
+- **图形残留必须 Agent 视检补 `extra_mask_regions`（2026-10-29 麦迪十佳球实录）**：
+  静态贴片上的**非文字图形**——箭头、横幅色块、台标、飘带、频道 logo——OCR 检不出，
+  文字 mask 只盖住字，图形会整块残留（实录：橙色▶箭头+横幅、YouTube 红标+黄飘带全程残留 140s）。
+  Agent 看首帧/中部帧后往 `localization-plan.json` 写：
+  `"extra_mask_regions": [{"item_id","label","x","y","w","h","start_time","end_time"}, ...]`，
+  `generate_masks.py` 会把它们合成为 remove item 走同一管线。区域坐标用首帧彩色聚类实测
+  （sat>90 连通域），并确认落在黑条内（不与画面区重叠）。贴片上的英文文字（如 "(3/3)"）
+  若随横幅一起被抹掉，记得并进相邻 translate 项的 `target_text` 重绘。
+- **封面必须裁到实际内容区 `detect_content_band`（2026-10-29 国王/98全明星实录）**：
+  源帧两类版式会把非画面区域裁进封面：① 硬 letterbox（上下纯黑条）→ 标题压死黑；
+  ② 转载「模糊背景+中部清晰横条」→ logo 区落在暗模糊带上读作大黑框。
+  `generate_cover.detect_content_band` 两级检测（行最大亮度查黑条 → 4x 降采样行
+  清晰度查模糊带），裁到内容区再交引擎，并把人脸框（`spec.face_box`）一并传入——
+  引擎内部单遍 Haar 对大而暗的特写脸会漏检导致 face-aware 裁切失效、脸被切在画面上缘。
+  另外 `backdrop=blur` 已扩展到 stack 版式（此前 stack 落纯黑画布，标题背景死黑）。
+  post 文案规则同日更新：Summary 只写视频内容本身；hashtag 渲染时自动补 `#` 前缀。
 
 **长片真人解说：字幕必须"人工合并"，别指望 OCR（2026-09-27 05 实录）**
 

@@ -18,7 +18,10 @@ generate_post.py - 生成 TikTok 发布方案（九段结构 Markdown）
 
 核心规则（必须遵守，违反即不合格）：
   1. 内容简介、Caption、置顶评论必须是英文（源视频是中文，但目标平台是 TikTok 英文用户）
-  2. 话题标签恰好 5 个，必须是与视频内容相关且在 TikTok 上热门的标签（禁止泛泛的 #fyp #viral）
+  1b. Summary **只写视频内容本身**（2026-10-29 用户规则）：画面里是什么球/谁/什么动作，
+      不放系列元信息、策略、制作说明；Section 1 也不再展示 Topic 行
+  2. 话题标签恰好 5 个，必须是与视频内容相关且在 TikTok 上热门的标签（禁止泛泛的 #fyp #viral）；
+     渲染时自动补 `#` 前缀（2026-10-29 用户规则：标签裸词不带 # 是 bug）
   3. 置顶评论必须包含：内容预告（驱动关注）、品牌账号、互动问题（提升评论量）
   4. BGM 推荐必须给出具体歌名、艺术家、BPM、风格、授权状态、下载方式，不能泛泛推荐
   5. 发布时间建议必须同时给出北京时间和对应美国时间（美东/美西）
@@ -388,11 +391,11 @@ def render_markdown(content: Dict, processing_report: Dict, output_dir: str,
     lines.append("")
 
     # 一、视频内容简介（必须英文）
+    # 2026-10-29 用户规则：Summary 只写视频内容本身（画面里是什么球、谁、什么动作），
+    # 不放系列元信息/策略/制作说明等其他内容，也不展示 Topic 行。
     lines.append("## 1. Video Summary")
     lines.append("")
-    lines.append(f"**Topic**: {content.get('title', 'N/A')}")
-    lines.append("")
-    lines.append(f"**Summary**: {content.get('summary', 'N/A')}")
+    lines.append(f"{content.get('summary', 'N/A')}")
     lines.append("")
 
     # 二、TikTok Caption（英文）+ BGM 署名（CC BY 的 "BY" 是硬性条件，见 §12.4）
@@ -410,6 +413,9 @@ def render_markdown(content: Dict, processing_report: Dict, output_dir: str,
     if hashtags:
         # 确保恰好 5 个
         display_tags = hashtags[:5] if len(hashtags) >= 5 else hashtags + ["#NBA"] * (5 - len(hashtags))
+        # 2026-10-29 用户规则：发布时每个标签必须带 # 前缀（Agent 存的裸词在这里补齐）
+        display_tags = ["#" + t.lstrip("#") if isinstance(t, str) and not t.startswith("#") else t
+                        for t in display_tags]
         lines.append("```")
         lines.append(" ".join(display_tags))
         lines.append("```")
