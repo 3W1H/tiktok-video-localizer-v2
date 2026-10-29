@@ -48,6 +48,38 @@ FFMPEG = shutil.which("ffmpeg") or os.path.expanduser("~/.local/bin/ffmpeg")
 # text that belongs to the jersey/scoreboard -- never wipe these
 OCR_KEEP = ("SHERS", "SIXERS", "IVERSON", "LAKERS", "PHILA")
 
+_EYE_CAS = None
+
+
+def _eye_cascade():
+    """二级验证用的眼睛级联（惰性加载、模块级缓存，避免每帧重读 XML）。"""
+    global _EYE_CAS
+    if _EYE_CAS is None:
+        _EYE_CAS = cv2.CascadeClassifier(
+            cv2.data.haarcascades + "haarcascade_eye.xml")
+    return _EYE_CAS
+
+
+def _verified_faces(gray, faces):
+    """Haar 正脸检测的二级验证：脸部 ROI 内必须至少检出一只眼睛。
+
+    背景（2026-10-28 国王封面实测）：单级 frontalface 级联在模糊/背影画面上
+    误报严重 —— 背影镜头（WEBBER 4 球衣）被判 face_area≈0.23 的高分，
+    自动选帧精准地选中了一张**没有脸**的封面。眼部复核能杀掉绝大多数
+    背影/花纹误报，代价极小（ROI 很小）。
+    """
+    eye = _eye_cascade()
+    out = []
+    for (x, y, fw, fh) in faces:
+        roi = gray[y:y + fh, x:x + fw]
+        if roi.size == 0:
+            continue
+        eyes = eye.detectMultiScale(roi, 1.1, 4, minSize=(max(8, fh // 6),
+                                                         max(8, fh // 6)))
+        if len(eyes) >= 1:
+            out.append((x, y, fw, fh))
+    return out
+
 
 def score_frame(path):
     img = cv2.imread(path)
@@ -58,6 +90,7 @@ def score_frame(path):
     cas = cv2.CascadeClassifier(
         cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
     faces = cas.detectMultiScale(gray, 1.1, 5, minSize=(36, 36))
+    faces = _verified_faces(gray, faces)
     face = sum(int(fw) * int(fh) for (_, _, fw, fh) in faces) / float(w * h)
     lap = float(cv2.Laplacian(gray, cv2.CV_64F).var())
     top = gray[:int(h * 0.45)]

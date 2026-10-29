@@ -461,6 +461,33 @@ def resolve(spec: CoverSpec) -> Resolved:
 # --------------------------------------------------------------------------
 # Composition
 # --------------------------------------------------------------------------
+def _largest_verified_face(frame):
+    """最大的（眼部复核过的）人脸框，source px；无则 None。
+
+    2026-10-29 国王封面"没有脸"第三层根因：fill 裁切在 img_h/scale == 全帧高时
+    零余量，脸贴着源帧上缘就原样贴到 picture box 顶边、被标题压住。选帧已修
+    （占位盲信/路径重接/眼部复核），这里是最后一层 —— 裁切要感知人脸。
+    复用 pick_cover_frame 的级联 + 眼部二级验证，避免背影误报。
+    """
+    try:
+        import cv2
+        import numpy as np
+        from pick_cover_frame import _verified_faces
+        bgr = cv2.cvtColor(np.array(frame.convert("RGB")), cv2.COLOR_RGB2BGR)
+        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+        h, w = gray.shape[:2]
+        cas = cv2.CascadeClassifier(
+            cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+        min_side = max(36, int(min(w, h) * 0.06))
+        faces = cas.detectMultiScale(gray, 1.1, 5, minSize=(min_side, min_side))
+        faces = _verified_faces(gray, faces)
+        if not faces:
+            return None
+        return max(faces, key=lambda f: f[2] * f[3])
+    except Exception:
+        return None
+
+
 def compose(frame: Image.Image, spec: CoverSpec,
             res: Optional[Resolved] = None) -> Tuple[Image.Image, Dict[str, Any]]:
     """Compose one cover from a frame. Pure: no IO, no plan, no frame choice.
@@ -657,9 +684,28 @@ def compose(frame: Image.Image, spec: CoverSpec,
     # 画面被拉长"). Scaling by the LARGER of the two ratios keeps the aspect
     # and simply crops the extra width instead.
     scale = max(canvas_w / src_w, img_h / src_h)
+    base_scale = scale
     img = frame.resize((int(round(src_w * scale)), int(round(src_h * scale))),
                        Image.LANCZOS)
     pic_origin_x = max(0, (img.size[0] - canvas_w) // 2)
+
+    # --- face-aware zoom (2026-10-29, 国王"没有脸"封面) ---------------------
+    # fill 取景在竖直方向没有余量时（img_h/scale == 全帧高），脸若贴着源帧
+    # 上/下缘就只能贴着 picture box 边缘，被标题/品牌字压住 —— 等于没脸。
+    # 检出人脸时放大取景：脸占画面高约 30%，中心落在 40% 高度（三分法偏上）。
+    # 放大上限 2.2x（防小脸拉出马赛克），窗口有 0.35*src_h 与 2.5*face_h 两道
+    # 语境下限；脸已经足够大（win >= 全帧）时自动退回默认取景。
+    face_box = _largest_verified_face(frame)
+    face_win = None
+    if face_box and spec.layout != "classic":
+        fx, fy, fw, fh = face_box
+        win = max(fh / 0.30, 0.35 * src_h, fh * 2.5, (img_h / scale) / 2.2)
+        win = min(win, float(src_h))
+        if win * scale < img_h * 0.995:      # 只有真的需要放大时才改取景
+            face_win = (fx + fw / 2.0, fy + fh / 2.0, win)
+            scale = img_h / win
+            img = frame.resize((int(round(src_w * scale)),
+                                int(round(src_h * scale))), Image.LANCZOS)
 
     # Trim away the bands that carry burned-in video titles/subtitles so the
     # cover never shows a second copy of the headline or a stray caption.
@@ -678,6 +724,19 @@ def compose(frame: Image.Image, spec: CoverSpec,
         px, so a caller can map source-space boxes (faces) into canvas space.
         """
         need = target_h / scale                      # source px
+        if face_win:
+            # 人脸感知取景：脸中心落在窗口 40% 高度，水平居中于脸
+            # （frame 已在 generate_cover 里清理过，无需再避让烧字带）
+            fcx, fcy, win = face_win
+            need = min(need, win * scale)
+            c_top = min(max(fcy - 0.40 * win, 0.0), max(0.0, src_h - win))
+            nonlocal pic_origin_x
+            pic_origin_x = int(round(min(max(fcx * scale - canvas_w / 2.0, 0.0),
+                                         max(0.0, img.size[0] - canvas_w))))
+            x0 = pic_origin_x
+            crop = img.crop((x0, int(round(c_top * scale)), x0 + canvas_w,
+                             int(round((c_top + need) * scale))))
+            return crop, int(round(c_top * scale)), int(round(need * scale))
         lo, hi = ct_lim / scale, cb_lim / scale      # source px
         if need > (hi - lo):
             lo, hi = 0.0, float(src_h)
@@ -913,6 +972,9 @@ def compose(frame: Image.Image, spec: CoverSpec,
             "dst_h": int(img_h),
         },
         "source": {"width": src_w, "height": src_h},
+        "face_crop": ({"face_box_src": [int(v) for v in face_box],
+                       "window_src_h": round(face_win[2], 1),
+                       "zoom": round(scale / base_scale, 3)} if face_win else None),
         "composition": {"top": float(head_y), "bottom": float(bottom)},
         "safe_ok": bool(safe_ok),
         "headline_lines": head_text.split("\n"),

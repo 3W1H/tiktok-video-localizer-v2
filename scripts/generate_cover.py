@@ -191,7 +191,19 @@ def select_best_frame(frames: List[Dict], video_understanding: Dict,
             scored.append((r["score"] + bonus, frame, r))
         if scored:
             scored.sort(key=lambda x: -x[0])
-            best, r = scored[0][1], scored[0][2]
+            pick = scored[0]
+            # 面脸优先（2026-10-28）：score 公式虽以 face 主导，但全片都无正面脸时
+            # top1 依然没脸 —— 用户点名"封面怎么都没有脸了"。face_protection 开启时
+            # 若存在有脸的帧，即使分数低也优先选有脸的。
+            if face_protection and pick[2]["face"] < 0.015:
+                with_face = [e for e in scored if e[2]["face"] >= 0.015]
+                if with_face:
+                    log.info("top-scored frame has no face; preferring best frame "
+                             f"with a face (face_area={with_face[0][2]['face']:.3f}, "
+                             f"t={with_face[0][1].get('timestamp_sec')}s, "
+                             f"score={with_face[0][0]:.2f} vs {pick[0]:.2f})")
+                    pick = with_face[0]
+            best, r = pick[1], pick[2]
             best["sharpness"] = round(r["lap"] / 1000.0, 4)
             best["cover_score"] = round(scored[0][0], 4)
             best["face_area"] = round(r["face"], 5)
@@ -215,7 +227,11 @@ def select_best_frame(frames: List[Dict], video_understanding: Dict,
         scored.append((sharpness * 0.5 + highlight_bonus + face_bonus, frame,
                        sharpness))
     if not scored:
-        return frames[0]
+        # 兜底也要挑存在的文件：frames[0] 可能指向已改名的旧目录
+        for fr in frames:
+            if os.path.exists(fr.get("path", "")):
+                return fr
+        return None
     scored.sort(key=lambda x: x[0], reverse=True)
     best = scored[0][1]
     best["sharpness"] = round(scored[0][2], 4)
@@ -332,6 +348,69 @@ def clean_frame_with_plan(img, plan_items, frame_time=None, blur_radius=25,
         cleaned_count += 1
 
     return Image.fromarray(frame), cleaned_count
+
+
+def ocr_clean_cjk(img, conf_threshold: float = 0.5):
+    """封面帧 CJK 兜底清理：plan 没命中的漏网中文由 OCR 全检补刀。
+
+    背景（2026-10-28）：clean_frame_with_plan 只擦「frame_time 那一刻在 plan
+    窗口内」的区域，字幕行/角标若不在窗口内就漏 —— 国王封面残留「韦伯生涯十佳球」、
+    07 全明星封面残留「看我」，同一类 bug 两例。
+    只擦**含 CJK 字符**的检出：球衣上的 KINGS、记分牌数字等英文/数字是画面
+    内容，绝不能动。无 rapidocr/cv2 时静默跳过（不阻塞封面生成）。
+    Returns: (cleaned PIL Image, n_regions)
+    """
+    try:
+        import cv2
+        import numpy as np
+        from PIL import Image
+        from rapidocr_onnxruntime import RapidOCR
+    except ImportError:
+        return img, 0
+    try:
+        frame = np.array(img.convert("RGB"))
+        h, w = frame.shape[:2]
+        res, _ = RapidOCR()(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+    except Exception as exc:                                    # pragma: no cover
+        log.warning(f"OCR sweep skipped: {exc}")
+        return img, 0
+    if not res:
+        return img, 0
+    mask = np.zeros((h, w), dtype=np.uint8)
+    n = 0
+    for box, text, conf in res:
+        if conf < conf_threshold:
+            continue
+        if not any('\u4e00' <= c <= '\u9fff' for c in (text or "")):
+            continue
+        cv2.fillPoly(mask, [np.array(box, np.int32)], 255)
+        n += 1
+    if n:
+        mask = cv2.dilate(mask, np.ones((9, 9), np.uint8))
+        frame = cv2.inpaint(frame, mask, 7, cv2.INPAINT_TELEA)
+    return Image.fromarray(frame), n
+
+
+def _rebase_frame_paths(frames, work_dir):
+    """frames-index 里的绝对路径可能指向改名前的旧目录（如整目录后加 -done）。
+
+    帧文件其实还在当前 work_dir 下。不重接的后果：所有路径不存在 → 评分全跳过
+    → legacy 兜底 return frames[0] → 未评分的 t=0 粗扫帧直接当封面（2026-10-28 国王实测）。
+    Returns: (frames, n_fixed)
+    """
+    fixed = 0
+    for fr in frames or []:
+        p = fr.get("path") or ""
+        if p and not os.path.exists(p):
+            idx = p.find("frames" + os.sep)
+            if idx < 0:
+                idx = p.find("frames/")
+            if idx >= 0:
+                cand = os.path.join(work_dir, p[idx:].replace("/", os.sep))
+                if os.path.exists(cand):
+                    fr["path"] = cand
+                    fixed += 1
+    return frames, fixed
 
 
 # --------------------------------------------------------------------------
@@ -519,12 +598,33 @@ def main():
 
     frames = load_json(args.frames_index
                        or work_path(args.work_dir, "frames-index.json"), []) or []
+    frames, n_rebased = _rebase_frame_paths(frames, args.work_dir)
+    if n_rebased:
+        log.info(f"rebased {n_rebased} frame path(s) onto current work dir "
+                 "(frames-index pointed at a renamed directory)")
     understanding = load_json(
         args.video_understanding
         or work_path(args.work_dir, "video-understanding.json"), {}) or {}
     plan = load_json(plan_path, {}) or {}
 
-    selected_frame = plan.get("selected_frame")
+    # ⚠️ selected_frame 有两种来源：Agent/上轮跑分写回的**决策**（带 cover_score），
+    # 或 prepare_plan 播下的**占位**（cover_score=None，注释自述 TODO(agent)）。
+    # 占位不是决策 —— 盲信它会把未评分的 t=0 粗扫帧当封面（2026-10-28 国王实测：
+    # 脸被切在画面顶端）。无评分一律走自动选帧；自动选帧失败才退回占位。
+    placeholder = plan.get("selected_frame")
+    if placeholder and placeholder.get("cover_score") is None:
+        if placeholder.get("path") and not os.path.exists(placeholder["path"]):
+            fixed_list, _ = _rebase_frame_paths([placeholder], args.work_dir)
+            placeholder = fixed_list[0] if fixed_list else None
+        log.warning("cover-plan.selected_frame has no cover_score -- it is a "
+                    "prepare_plan placeholder, not a decision; running "
+                    "auto-selection instead")
+        if not (placeholder and os.path.exists(placeholder.get("path", ""))):
+            placeholder = None
+        selected_frame = None
+    else:
+        selected_frame = placeholder
+        placeholder = None
     if not selected_frame:
         log.info("Selecting best frame automatically...")
         selected_frame = select_best_frame(
@@ -534,6 +634,10 @@ def main():
                      f"{selected_frame.get('timestamp_sec')}s "
                      f"(score={selected_frame.get('cover_score', '-')}, "
                      f"sharpness={selected_frame.get('sharpness')})")
+        elif placeholder:
+            log.warning("auto-selection produced nothing; falling back to the "
+                        "unscored placeholder frame")
+            selected_frame = placeholder
     if not selected_frame or not os.path.exists(selected_frame.get("path", "")):
         log.error("No valid frame selected for cover")
         sys.exit(1)
@@ -556,6 +660,12 @@ def main():
     cleaned_count = 0
     if cover_style.get("clean_frame_enabled", True):
         img, cleaned_count = clean_frame_with_plan(img, plan_raw_items, frame_time)
+        # CJK 兜底：plan 窗口没命中的漏网中文由 OCR 全检补刀
+        # （只擦含 CJK 的检出，球衣/记分牌等英文数字不动）
+        img, n_ocr = ocr_clean_cjk(img)
+        if n_ocr:
+            log.info(f"OCR sweep cleaned {n_ocr} leftover CJK region(s) "
+                     "plan cleaning missed")
 
     spec = build_spec(headline, cover_style, plan, args)
     result = render_cover(img, spec)
@@ -572,6 +682,10 @@ def main():
     render_info["faces_detected"] = len(face_areas)
     render_info["face_areas"] = face_areas
     render_info["frame_cleaned_regions"] = cleaned_count
+    try:
+        render_info["frame_ocr_cleaned_regions"] = n_ocr
+    except NameError:
+        render_info["frame_ocr_cleaned_regions"] = 0
     # QA compares cleaned vs expected -- expected means "on screen at the
     # selected frame", not "everywhere in the video".
     render_info["frame_clean_expected"] = len(items_at_frame)
