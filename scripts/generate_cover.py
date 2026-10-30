@@ -826,6 +826,16 @@ def main():
     else:
         selected_frame = placeholder
         placeholder = None
+        # 决策帧也要重接路径（2026-10-30 打架就打架 实录）：项目完成后目录
+        # 常被改名（加 -done 后缀），frames-index 有 _rebase 兜底，但
+        # cover-plan.selected_frame.path 是独立写的，失效会导致
+        # "No valid frame selected" 直接退出。
+        if selected_frame and selected_frame.get("path") \
+                and not os.path.exists(selected_frame["path"]):
+            fixed_list, _ = _rebase_frame_paths([selected_frame], args.work_dir)
+            if fixed_list and os.path.exists(fixed_list[0].get("path", "")):
+                log.info(f"rebased selected_frame path -> {fixed_list[0]['path']}")
+                selected_frame = fixed_list[0]
     if not selected_frame:
         log.info("Selecting best frame automatically...")
         selected_frame = select_best_frame(
