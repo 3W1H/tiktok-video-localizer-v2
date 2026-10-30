@@ -341,8 +341,10 @@ def render_translated_titles(video_path: str, plan: Dict, out_path: str,
             span = float(item.get("end_time", 0)) - float(item.get("start_time", 0))
         except (TypeError, ValueError):
             span = 0.0
+        # 阈值 2026-10-30 收紧（森林狼跳舞大叔实测）：A2 窗口 47.7s=全片 64%，
+        # 但绝对值 <60s 漏过旧阈值。真实台词极少超 30s，50% 时长 + 30s 双门槛。
         if (item.get("category") in _CAPTION_CATEGORIES and video_dur > 0
-                and span >= max(60.0, 0.5 * video_dur)):
+                and span >= max(30.0, 0.5 * video_dur)):
             skipped_ids.append(item.get("item_id"))
             continue
         kept_items.append(item)
@@ -350,6 +352,29 @@ def render_translated_titles(video_path: str, plan: Dict, out_path: str,
         log.warning(
             f"  Skipped {len(skipped_ids)} caption item(s) with full-video window "
             f"(summary captions, not timed lines): {skipped_ids}"
+        )
+    translate_items = kept_items
+
+    # 防御2（2026-10-30，森林狼跳舞大叔实测）：OCR 分组会把全片多个标题汇总成
+    # 一个伪条目（文本 = 其他条目文本的拼接），全片常驻且超宽。若某项的归一化
+    # 文本包含另一项的完整归一化文本，则它是汇总伪条目，跳过绘制。
+    def _norm_text(s):
+        return "".join((s or "").lower().split())
+
+    norms = [_norm_text(it.get("target_text")) for it in translate_items]
+    kept_items = []
+    skipped_dup = []
+    for idx, item in enumerate(translate_items):
+        if norms[idx] and any(
+                j != idx and norms[j] and norms[j] in norms[idx]
+                for j in range(len(norms))):
+            skipped_dup.append(item.get("item_id"))
+            continue
+        kept_items.append(item)
+    if skipped_dup:
+        log.warning(
+            f"  Skipped {len(skipped_dup)} aggregate item(s) whose text "
+            f"contains other items' text (OCR-grouped pseudo entries): {skipped_dup}"
         )
     translate_items = kept_items
 
@@ -363,6 +388,24 @@ def render_translated_titles(video_path: str, plan: Dict, out_path: str,
         run(["ffmpeg", "-y", "-i", video_path, "-c", "copy", out_path])
         return {"titles_rendered": 0, "warning": "font not found"}
 
+    # 防御3（2026-10-30，森林狼实测）：文本超宽会横向出屏（fs48 三标题拼接
+    # ≈2200px 宽 / 720px 画幅，两端被裁）。按画幅宽度自适应缩小字号。
+    def _fit_font_size(text, font_size):
+        try:
+            from PIL import ImageFont
+            widest = max(text.split("\n"), key=len)
+            font = ImageFont.truetype(font_path, int(font_size))
+            box = font.getbbox(widest)
+            tw = box[2] - box[0]
+            if tw <= 0:
+                return font_size
+            max_w = frame_w * 0.92
+            if tw <= max_w:
+                return font_size
+            return max(16, int(font_size * max_w / tw))
+        except Exception:
+            return font_size
+
     # 构建 drawtext 滤镜链
     drawtext_filters = []
     for item in translate_items:
@@ -371,7 +414,7 @@ def render_translated_titles(video_path: str, plan: Dict, out_path: str,
         replacement = item.get("replacement") or {}
 
         # 样式参数
-        font_size = replacement.get("font_size", 36)
+        font_size = _fit_font_size(target_text, replacement.get("font_size", 36))
         font_color = replacement.get("font_color", "0xFFD700")  # 金色
         border_color = replacement.get("border_color", "black")
         border_width = replacement.get("border_width", 3)
@@ -424,6 +467,7 @@ def render_translated_titles(video_path: str, plan: Dict, out_path: str,
     return {
         "titles_rendered": len(translate_items),
         "skipped_full_video_captions": skipped_ids,
+        "skipped_aggregate_entries": skipped_dup,
         "font": font_path,
     }
 

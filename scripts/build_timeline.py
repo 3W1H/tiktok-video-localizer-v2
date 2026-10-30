@@ -35,10 +35,10 @@ def main():
     # 防御（2026-10-29，98全明星 A1/A2 实测）：Agent 会把视频简介总结文案
     # 错标成全片窗口（0→187.7s）。这种「伪台词」进 timeline 后，SRT 的重叠
     # 修剪把它压成 0-0.4s 叠影、成片绘制把它变成全片常驻字幕。
-    # 上游在这里直接剔除：窗口 >= max(60s, 50% 全片跨度) 的 dialogue 一律不进。
+    # 上游在这里直接剔除：窗口 >= max(30s, 50% 全片跨度) 的 dialogue 一律不进。
     video_span = max((float(it.get("end_time") or 0) - float(it.get("start_time") or 0)
                       for it in items), default=0.0)
-    full_span_limit = max(60.0, 0.5 * video_span)
+    full_span_limit = max(30.0, 0.5 * video_span)
     entries = []
     n_pseudo = 0
     for i, it in enumerate(items):

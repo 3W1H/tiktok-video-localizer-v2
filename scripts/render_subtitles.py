@@ -45,8 +45,17 @@ def _collect_rows(timeline: Dict, plan: Dict = None) -> List:
             end = float(win.get("end", 0))
             if end <= start:
                 end = start + 2
-        rows.append([start, end, text])
+        rows.append([start, end, text, _item_y(items, idx) if items else 0])
     return rows
+
+
+def _item_y(items, idx):
+    """plan item 的绘制 y 坐标（用于同带判定），解析失败返回 0。"""
+    try:
+        rep = items[idx].get("replacement") or {}
+        return float(rep.get("y", 0))
+    except (TypeError, ValueError, IndexError):
+        return 0.0
 
 
 def generate_srt(timeline: Dict, output_path: str, plan: Dict = None) -> int:
@@ -69,7 +78,7 @@ def generate_srt(timeline: Dict, output_path: str, plan: Dict = None) -> int:
     # 与其他 cue 同起点的 0.4s 叠影。正常台词不会超过 60s，直接剔除。
     if rows:
         max_end = max(r[1] for r in rows)
-        limit = max(60.0, 0.5 * max_end)
+        limit = max(30.0, 0.5 * max_end)
         kept = [r for r in rows if r[1] - r[0] <= limit]
         if len(kept) != len(rows):
             log.warning(
@@ -80,39 +89,52 @@ def generate_srt(timeline: Dict, output_path: str, plan: Dict = None) -> int:
 
     rows.sort(key=lambda r: (r[0], r[1]))
 
-    # 防御（2026-10-29，98全明星 A10/A12 实测）：多条 cue 挤在同一个窗口
-    # （同一句话的重复译文/相邻两句同窗口）时，下面的逐条修剪会把它们全部
-    # 压成同起点的 0.4s 叠影。改为把共享窗口按条数均分成先后切片。
-    i = 0
-    while i < len(rows):
-        j = i
-        while (j + 1 < len(rows)
-               and rows[j + 1][0] - rows[i][0] < 0.35
-               and abs(rows[j + 1][1] - rows[i][1]) < 0.60):
-            j += 1
-        if j > i:
-            w_start = min(r[0] for r in rows[i:j + 1])
-            w_end = max(r[1] for r in rows[i:j + 1])
-            step = (w_end - w_start) / (j - i + 1)
-            for k, idx in enumerate(range(i, j + 1)):
-                rows[idx][0] = round(w_start + k * step, 3)
-                rows[idx][1] = round(w_start + (k + 1) * step - 0.02, 3)
-            log.info(f"SRT: split {j - i + 1} cues sharing window "
-                     f"{w_start:.2f}-{w_end:.2f}s into sequential slices")
-            i = j + 1
-        else:
-            i += 1
+    # 防御（2026-10-30，森林狼跳舞大叔实测）：重叠修剪必须感知屏幕位置 ——
+    # 顶部标题(y≈42)与底部字幕(y≈563)时间重叠是正常同显，互相挤压会把
+    # 正常 cue 压成 0.4s。按 y 带（60px 桶）分组，组内独立做同窗口均分与残余修剪。
+    def _band(r):
+        return int(round((r[3] if len(r) > 3 else 0) / 60.0))
 
-    # 残余的部分重叠：压掉重叠段（保底 0.4s 可读时长）
-    for i in range(len(rows) - 1):
-        if rows[i][1] > rows[i + 1][0]:
-            rows[i][1] = max(rows[i][0] + 0.4, rows[i + 1][0] - 0.02)
+    band_map = {}
     for r in rows:
-        if r[1] - r[0] < 0.2:
-            r[1] = r[0] + 0.2
+        band_map.setdefault(_band(r), []).append(r)
+    out_rows = []
+    for band in band_map.values():
+        band.sort(key=lambda r: (r[0], r[1]))
+        # 同带内多条 cue 挤同一窗口：按条数均分成先后切片
+        i = 0
+        while i < len(band):
+            j = i
+            while (j + 1 < len(band)
+                   and band[j + 1][0] - band[i][0] < 0.35
+                   and abs(band[j + 1][1] - band[i][1]) < 0.60):
+                j += 1
+            if j > i:
+                w_start = min(r[0] for r in band[i:j + 1])
+                w_end = max(r[1] for r in band[i:j + 1])
+                step = (w_end - w_start) / (j - i + 1)
+                for k, idx in enumerate(range(i, j + 1)):
+                    band[idx][0] = round(w_start + k * step, 3)
+                    band[idx][1] = round(w_start + (k + 1) * step - 0.02, 3)
+                log.info(f"SRT: split {j - i + 1} cues sharing window "
+                         f"{w_start:.2f}-{w_end:.2f}s into sequential slices")
+                i = j + 1
+            else:
+                i += 1
+        # 残余的部分重叠：压掉重叠段（保底 0.4s 可读时长）
+        for i in range(len(band) - 1):
+            if band[i][1] > band[i + 1][0]:
+                band[i][1] = max(band[i][0] + 0.4, band[i + 1][0] - 0.02)
+        for r in band:
+            if r[1] - r[0] < 0.2:
+                r[1] = r[0] + 0.2
+        out_rows.extend(band)
+
+    out_rows.sort(key=lambda r: (r[0], r[1]))
+    rows = out_rows
 
     lines = []
-    for i, (start, end, text) in enumerate(rows, 1):
+    for i, (start, end, text, _y) in enumerate(rows, 1):
         lines.append(str(i))
         lines.append(f"{sec_to_srt_time(start)} --> {sec_to_srt_time(end)}")
         lines.append(text)
