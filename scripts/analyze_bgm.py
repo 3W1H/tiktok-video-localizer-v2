@@ -398,6 +398,66 @@ def plan_loop(bgm_dur, video_dur, valley):
 # ============================================================
 # 主流程
 # ============================================================
+def monotony_profile(path, sr=44100, win_sec=0.5, smooth_sec=5.0):
+    """量化「单调」——长片上最常被用户骂的问题（2026-11-13 新增）。
+
+    用户原话：「背景音乐一直是打镲很单调」「太单调了，也太没有意思了」。
+    这抱怨的不是音色刺耳（那是高频能量/谱质心的问题，见 SKILL.md §3 的 hat/kick
+    与 peak EQ），而是**结构平**：整首曲子从头到尾一个织体、一个响度。
+
+    两个指标：
+      cymbal_frame_ratio  6–16kHz 包络归一化后 >0.35 的帧占比。
+                          八分踩镲铺满全曲 = 每一帧都在响 → 接近 1.0
+      loudness_sd_5s      5s 滑窗响度标准差。编曲有起伏才有值；loop 素材 ≈0.5~1.0
+
+    ⚠️ 采样率必须 ≥32k 才能覆盖 6–16k，所以本函数**自己按 44.1k 重新解码**，
+       不要复用 analyze() 里 22.05k 的那份（Nyquist 只有 11k）。
+    """
+    from scipy import signal as sg
+    a, sr = load_audio(path, sr)
+    win = int(win_sec * sr)
+    n = len(a) // win
+    if n < 8:
+        return None
+    seg = a[:n * win].reshape(n, win)
+    rms = 20.0 * np.log10(np.sqrt((seg ** 2).mean(axis=1)) + 1e-9)
+    k = max(1, int(round(smooth_sec / win_sec)))
+    sm = np.convolve(rms, np.ones(k) / k, mode="valid") if len(rms) >= k else rms
+    sd = float(np.std(sm))
+
+    hi = min(16000.0, sr / 2.0 - 500.0)
+    sos = sg.butter(4, [6000.0, hi], btype="bandpass", fs=sr, output="sos")
+    hf = sg.sosfiltfilt(sos, a[:n * win]).reshape(n, win)
+    env = np.sqrt((hf ** 2).mean(axis=1))
+    ref = float(np.percentile(env, 90)) or 1e-9
+    cymbal = float((env > 0.35 * ref).mean())
+
+    tags = []
+    if cymbal >= 0.20:
+        tags.append("cymbal_heavy")
+    if sd < 1.0:
+        tags.append("flat")
+    # ⚠️ 只做「参考」，不做门禁。2026-11-13 用 10 首曲目校准后发现：
+    #    cymbal_frame_ratio 全部落在 0.27~0.95，**用户认可与不认可的曲子完全重叠**
+    #    （Club Diver 0.921 被骂「一直是打镲」，换上的 Crunk Knight 0.927 被接受）。
+    #    也就是说「6–16k 能量占比」测的是「有没有镲」，不是「镲有没有铺满全曲」——
+    #    后者要靠瞬态**间隔规律性**，不是能量占比。
+    #    所以这里只在两端都极端时才敢下结论，其余一律 review（交给 A/B 试听）。
+    extreme = (cymbal >= 0.90 and sd < 1.2)
+    verdict = "likely_monotonous" if extreme else "review"
+    return {
+        "cymbal_frame_ratio": round(cymbal, 3),
+        "loudness_sd_5s": round(sd, 2),
+        "verdict": verdict,
+        "tags": tags,
+        "note": ("镲片帧占比极高且响度几乎没有起伏：几乎可以确定是「一个织体铺到底」，"
+                 "长片慎用。仍建议做 6 首 15s 对比片再定"
+                 if extreme else
+                 "指标仅供参考：这两项实测无法区分「用户觉得单调」与「用户接受」的曲子，"
+                 "选曲请以 6 首 ×15s A/B 对比片 + 试听为准（SKILL.md §3）"),
+    }
+
+
 def match_quality(bpm_measured, rhythm):
     if not rhythm:
         return "unknown", None
@@ -430,6 +490,20 @@ def analyze(bgm_path, rhythm=None, track_name=None):
     valley = find_valley(times, db, drops)
 
     quality, delta = match_quality(bpm_info.get("bpm"), rhythm)
+
+    # 单调度：长片上「一直是打镲 / 没起伏」是用户最高频的抱怨（2026-11-13 新增）
+    arc = None
+    try:
+        arc = monotony_profile(bgm_path)
+    except Exception as e:  # noqa: BLE001 - 失败不该挡住主流程
+        warnings.append(f"单调度分析失败：{str(e)[:120]}")
+    if arc and arc["verdict"] == "likely_monotonous":
+        vid_dur = float((rhythm or {}).get("duration_sec") or 0.0)
+        if vid_dur >= 180:
+            warnings.append(
+                f"单调度 likely_monotonous（镲片帧占比 {arc['cymbal_frame_ratio']:.2f}、"
+                f"5s 响度 SD {arc['loudness_sd_5s']:.2f}dB）：片长 {vid_dur:.0f}s ≥180s，"
+                f"{arc['note']}")
 
     # 变速建议：让 BGM 的 BPM 去贴合视频剪辑节奏
     atempo = 1.0
@@ -495,6 +569,7 @@ def analyze(bgm_path, rhythm=None, track_name=None):
         drops=drops,
         primary_drop=(drops[0]["t"] if drops else None),
         energy_valley=valley,
+        monotony=arc,
         alignment=alignment,
         loop=loop,
         rhythm=rhythm_summary,

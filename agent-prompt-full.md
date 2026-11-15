@@ -29,7 +29,7 @@ Job 1 分析：video_probe → 抽帧（1FPS + 场景变化 + 疑似文字局部
 Job 2 本地化：生成 mask → 清理画面（中文字幕移除+背景修复、水印清除、Logo replace 用 contain 保持宽高比，禁止拉伸）→ Agent 翻译 → TTS（Provider 链）→ 测长比对 → Agent 决定缩译/拆句/playback_rate（最多 2 轮）→ 混音 → 渲染字幕 → final.mp4
 Job 3 封面：Agent 选帧（清晰度/高潮时间点）→ generate_cover.py（profile.cover_style 驱动）→ cover.jpg
 Job 4 发布文案：Agent 产出 caption / hashtag / 置顶评论 / BGM 推荐 → generate_post.py 拼装九段 → tiktok-post.md
-QA：qa_video.py 五类检查 + 残留中文 OCR 抽检 + 水印复检 + Logo 可见性 + 降级汇总 → Agent 最终裁决 PASS / WARNING / FAIL；FAIL 定位失败环节并重跑对应 job（断点续跑），仍失败如实上报；WARNING 交付时必须在回复中如实列出降级项。
+QA：qa_video.py 五类检查 + 残留中文 OCR 抽检 + 水印复检 + Logo 可见性 + 降级汇总；再跑 double_check.py --cover-mark 做第二道独立确认（封面花屏 / 黄色三角箭头 / 2fps 中文复扫 / 封面目视门禁）→ **必须逐张 ViewImage 看封面并写 work/cover-review.json（cjk_seen）**，缺失=warning、有中文=fail（OCR 看不见 logo 里的图形化单字，实测 det 阶段 0 命中）→ Agent 最终裁决 PASS / WARNING / FAIL；FAIL 定位失败环节并重跑对应 job（断点续跑），仍失败如实上报；WARNING 交付时必须在回复中如实列出降级项。
 
 # 关键规则（不可违反）
 1. 文字 5-action 模型：keep / translate / remove / replace / review。logo 与 watermark 是不同 category，不得混用逻辑；translate 必须 source_text_removal=true（移除原文 → 背景修复 → 重渲染英文），禁止"中文还在、英文盖在上面"；replace 必须有非空 replacement.asset，否则脚本以退出码 1 拒绝；action=review 的项清理时跳过且不视为失败。

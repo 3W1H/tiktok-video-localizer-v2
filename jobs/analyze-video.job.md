@@ -80,7 +80,18 @@ python scripts/track_text.py --work-dir work
 python scripts/audio_processor.py asr-only --video input/source.mp4 --work-dir work
 ```
 - 确定性脚本（Whisper local → fallback）
-- 产出：`work/asr.json`（含 `has_chinese_narration`）
+- 产出：`work/asr.json`（含 `language_detected` / `has_chinese_narration` /
+  `has_foreign_narration` / `segments`）
+- 🔴 **本步不允许跳过**（2026-11-13 立的硬规则）。曾经为了省时间写成
+  `status: skipped, note: "batch uses remove_original_bgm_only"` —— 实测同一批 25 条里
+  **20 条**是 skipped，直接导致「英语解说片被判无解说 → 整轨删除」。ASR 是唯一能证明
+  「原声里有内容」的证据，**不能因为策略预判就放弃取证**。片子长就只跑采样
+  （`analyze_source_audio.py` 会自动做 3×45s），但必须有结论。
+- ⭐ **语言现在自动检测**（2026-11-13 修）：旧实现把 `language="zh"` 钉死，
+  英语解说会被强行按中文解码 —— 要么吐乱码汉字（`chinese_ratio` 冲过 0.3 →
+  误判「有中文旁白」→ 生成英文 TTS 覆盖原解说），要么吐空（→ 误判「无旁白」→ 丢整轨）。
+  现在 `language_detected` 写的是真实语言；`has_foreign_narration=true` 表示
+  **检出非中文解说，禁止 `remove_original_bgm_only`**。
 - ⚠️ **`has_chinese_narration` 不可直接采信**：whisper 会把非语音音频幻觉成中文。
   先看 `segments[].avg_logprob`——**≤ −3、或文本混着其他语种（俄/韩字母）、或不连贯碎片 = 幻觉**，
   按"非旁白"处理（见 SKILL.md §14.2）。2026-09-27 批次 8 条里 5 条中招。
@@ -88,6 +99,9 @@ python scripts/audio_processor.py asr-only --video input/source.mp4 --work-dir w
   `detect_asr_hallucination()` —— 三条判据（平均 avg_logprob < −0.70 / 重复句占比 ≥40% /
   固定时长段占比 ≥60%）**命中两条**即判幻觉。实测 01（奥尼尔·艾佛森）三条全中：
   16 段里 15 段都是整 2.00s、文本循环「我來做個高度／今天在吃飯」、平均 avg_logprob −0.81。
+- ⚠️ **幻觉 ≠ 没人说话**（2026-11-13 新增）：判定只说明「这份转写不能拿去生成 TTS」。
+  若文本以汉字为主（`chinese_ratio > 0.3`），仍应认定**有中文人声**（§12.3 硬门禁），
+  否则「科比屠龙名场面」那种 39 段固定 2.0s 的片子会被判成无人声而放过中文解说。
 
 ### Step 9: 视频节奏分析（★ 2026-09-28 新增）
 ```bash
@@ -180,19 +194,52 @@ python scripts/bgm_ledger.py record --track music/sports/<曲目>.mp3 \
   ③ 用 `plan_narration.py` 把 cue 转成 `category:"subtitle"` 的 items。
 - 这一遍人工合并是**必花的**，放在 Job1 之后立刻做，别等渲染完才发现字幕是碎的（SKILL.md §13.3）。
 
-### Step 14: [AGENT] 音频策略决策（规则化）
-- `narration-style.json.has_narration = true`（**且未判幻觉**）→ `audio_strategy = mute_original_tts_bgm`
-  ⭐ 此时 Job2 的 TTS 会**自动按原解说的语气语调**生成（读 `narration-style.json.tts_params`
-  的 voice/rate/pitch），不需要手填参数。详见 SKILL.md §3。
-- `has_narration = false`（**含"ASR 幻觉"判定为 false 的情形**）→
-  按用户当前口径（2026-09-28）：**丢掉原片全部音频，只铺新 BGM** → `remove_original_bgm_only`
-  ⚠️ 它的实现是**丢掉原片全部音频**（现场声/观众欢呼一起丢）——
+### Step 14: [AGENT] 原声结构诊断 → 音频策略决策
+
+**先诊断，再定策略。禁止从「has_chinese_narration=false」直接推出「丢原声」。**
+
+```bash
+python scripts/analyze_source_audio.py --video input/source.mp4 --work-dir work
+```
+
+产出 `work/source-audio-profile.json`：`has_speech` / `speech_lang` / `has_music` /
+`recommended_strategy` / `reasons`。ASR 缺失或 `asr.json` 被 skip 时，它自己会跑
+whisper 采样补证（3×45s，约 60s）。
+
+**为什么必须有这一步（2026-11-13 事故，代价是 3 条片子返工）**：
+`analyze_narration.py` 只回答「有没有**中文**解说」。旧规则在它答「否」之后直接判
+`remove_original_bgm_only`，于是
+
+* 英语现场解说片（原片本来就无音乐）→ 唯一的内容音轨被整条删掉，611s 只剩 BGM 循环；
+  用户原话：「bgm 都是垃圾，如果原视频有 BGM 可以用原来的」
+* 现场声 + 原片自带 BGM 的片 → 观众声与原曲一起消失；用户原话：
+  「BGM 太单调了，也太没有意思了」
+* 同一批 25 条里 **20 条**的 `asr.json` 是 `status: skipped`
+  （note：*batch uses remove_original_bgm_only*），形成
+  **「决定删原声 → 不跑 ASR → 没有证据反对删原声」的闭环**。
+  ⇒ **ASR 不允许因为「反正要丢原声」而跳过**（见 Step 8）。
+
+决策表（以 profile 的 `recommended_strategy` 为准；与下表冲突时以下表优先）：
+
+| profile | audio_strategy |
+|---|---|
+| `has_speech` 且 `speech_lang` 以 zh/cmn/yue 开头 | `mute_original_tts_bgm` |
+| `has_speech` 且语言非中文 | **`keep_original`** ★ 任何外语解说都不能丢 |
+| 无人声 + `has_music` | **`keep_original`**（原片自带 BGM，用户口径「用原来的」） |
+| 无人声 + 无音乐（纯现场声） | `duck_original_add_bgm` |
+| `recommended_strategy = null`（证据不足） | 先补 ASR / 人工听 15s，**不许猜** |
+
+- `mute_original_tts_bgm`：静音原轨 + 英文 TTS + Instrumental BGM。
+  ⭐ TTS 会**自动按原解说的语气语调**生成（读 `narration-style.json.tts_params`），
+  不需要手填 voice/rate/pitch。
+- 🔴 **`remove_original_bgm_only` 的合法触发条件只剩一条：用户明确要求换掉原曲/原声**
+  （例如"原声太吵，换个 BGM"）。它**不能**由「没检出中文」自动推导。
+  ⚠️ 它的实现是丢掉原片**全部**音频（现场声/欢呼一起丢），
   **不是**"只去 BGM、保留人声"（见 SKILL.md §3）。
-- **无中文旁白、要 BGM 主导但别丢现场氛围** → `audio_strategy = duck_original_add_bgm`
-  ⚠️ 它是"压低"不是"声源分离"：原 BGM 仍可闻，所以**只在无中文旁白时可用**
-  （装了 demucs 也做不到"去音乐留观众声"，别承诺，原因见 SKILL.md §3）。
-  ⚠️ 且保留原 BGM **不构成版权规避**（音频指纹对增益不敏感），要清版权只有 remove。
-- ASR 不可用 → 保守走 `keep_original` + WARNING
+- `duck_original_add_bgm`：保留原片全部音频但压到 `duck.volume_db`（默认 −15dB）再叠 BGM。
+  ⚠️ 是"压低"不是"声源分离"：原 BGM 仍可闻；装了 demucs 也做不到"去音乐留观众声"。
+  ⚠️ 保留原 BGM **不构成版权规避**（指纹对增益不敏感）。
+- ASR 与 whisper 都不可用 → 保守走 `keep_original` + WARNING，**绝不默认删原声**。
 
 **BGM 与节奏（必填进 plan）**：把 Step 11 选定的曲目写进 `audio-plan.json.bgm`，
 并保证 `work/bgm-plan.json` 已生成 —— Job2 的混音会读它做对齐（offset/atempo）。

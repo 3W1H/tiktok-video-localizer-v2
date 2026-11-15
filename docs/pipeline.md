@@ -248,6 +248,24 @@ python scripts/qa_video.py --work-dir work --output-dir output
 - 额外：残留中文 OCR 抽检、水印区复检、replace 后 Logo 可见性、review 项汇总
 - 输出：`work/qa.json`（PASS / WARNING / FAIL）
 
+## 交付前双检（第二道独立确认）
+
+```bash
+python scripts/double_check.py --output-dir output --json work/double-check.json --cover-mark
+```
+- `cover_sanity`：封面「花」——糊块 / 豆腐块(□) / 文字出框 / 叠字 / 空白 / 比例 / 中文（单字也报）
+- `yellow_arrow`：画面黄色三角箭头，≥2 抽样帧同位置才算真箭头（单帧只进 candidates）
+- `chinese_residue`：2fps 抽帧复扫中文，相位与 qa 的 1fps 整数秒错开
+- `cover visual review`：**硬门禁**——OCR 对 logo/徽标里的图形化汉字无效（实测 det 全 0 命中），
+  必须 Agent 逐张看封面并写 `work/cover-review.json`；缺失=warning，`cjk_seen:true`=fail，
+  封面重出后 sha1 变了=stale warning
+- `frame visual review`：**硬门禁**——抽 6 帧联览图（`--frame-mark` → `work/cover-check/frame-sheet.jpg`），
+  Agent 看完写 `work/frame-review.json`；成片重渲（size/mtime 变）=stale warning。
+  联览图按原生分辨率抽帧、裁黑边 + 裁模糊填充带后缩到 640px/帧（`--sheet-w`）——
+  低于 600px 时赞助牌汉字会糊成色块，目视结论不可信
+- 输出：`work/double-check.json`；`degraded`（OCR 不可用）不算通过
+- 规则与阈值教训见 SKILL.md「交付前双检（double_check.py）」
+
 ### [Agent] 最终裁决
 - PASS → 交付四件套
 - WARNING → 交付 + 如实列出降级项/低置信度保留项/timeline 未解决项

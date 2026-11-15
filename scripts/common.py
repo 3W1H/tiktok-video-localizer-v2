@@ -166,7 +166,12 @@ def run(
     capture: bool = True,
     timeout: Optional[int] = None,
 ) -> subprocess.CompletedProcess:
-    """运行子进程命令，失败时抛出带 stderr 摘要的异常"""
+    """运行子进程命令，失败时抛出带 stderr 摘要的异常
+
+    stdin 必须显式接 /dev/null：ffmpeg 默认会读 stdin（交互按键），当父进程的
+    非交互 stdin 是个没人写的管道时，抽帧/转码会**永久挂住**（2026-11-03 实测：
+    同一条命令在终端 1 秒完成，被 Agent 后台调用则卡到超时）。
+    """
     log.debug(f"Running: {' '.join(map(str, cmd))}")
     try:
         r = subprocess.run(
@@ -174,6 +179,7 @@ def run(
             capture_output=capture,
             text=True,
             timeout=timeout,
+            stdin=subprocess.DEVNULL,
         )
     except subprocess.TimeoutExpired as e:
         raise RuntimeError(f"Command timed out after {timeout}s: {' '.join(map(str, cmd))}") from e
@@ -192,7 +198,8 @@ def run(
 def run_cmd_simple(cmd: List[str]) -> Tuple[int, str, str]:
     """简单运行命令，返回 (returncode, stdout, stderr)，不抛异常"""
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True)
+        r = subprocess.run(cmd, capture_output=True, text=True,
+                           stdin=subprocess.DEVNULL)
         return r.returncode, r.stdout or "", r.stderr or ""
     except Exception as e:
         return -1, "", str(e)

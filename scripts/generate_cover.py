@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 from typing import Any, Dict, List, Optional
 
@@ -421,6 +422,75 @@ def _frame_ocr_boxes(frame_rgb):
     return out
 
 
+_SEQ_LABEL_RE = re.compile(r"^#?\s*\d{1,2}$")
+
+
+def _hline_fill(frame, box, pad=6, feather=8):
+    """用左右边缘逐行水平插值填掉一个小框（原地修改并返回）。
+
+    为什么不用 inpaint：封面上的「#5」这类排名序号常常压在**球员身体**上，
+    框的正下方又是地板边线，TELEA 会把下方米色地板当参照物往上拉，填出一块
+    比周围亮的补丁；纯垂直插值同理。逐行水平插值只借用**同一行**左右两侧的
+    像素，地线、球衣边界都能自然延续过去（2026-10-30 xWT127 实测）。
+
+    边缘 ``feather`` 行/列做渐变混合，避免留下硬边方框。
+    """
+    import numpy as np
+    import cv2
+
+    h, w = frame.shape[:2]
+    x0, y0, x1, y1 = box
+    xa, xb = max(0, x0 - pad), min(w, x1 + pad)
+    ya, yb = max(0, y0 - pad), min(h, y1 + pad)
+    if xb - xa < 3 or yb - ya < 3:
+        return frame
+
+    src = frame[ya:yb, xa:xb].astype(np.float32)
+    lb = frame[ya:yb, max(0, xa - 5):xa].astype(np.float32).mean(axis=1)
+    rb = frame[ya:yb, xb:min(w, xb + 5)].astype(np.float32).mean(axis=1)
+    t = np.linspace(0, 1, xb - xa)[None, :, None]
+    fill = lb[:, None, :] * (1 - t) + rb[:, None, :] * t
+    fill = cv2.GaussianBlur(fill.astype(np.float32), (1, 5), 0)
+
+    fh, fw = fill.shape[:2]
+    a = np.ones((fh, fw), np.float32)
+    for k in range(min(feather, fh // 2, fw // 2)):
+        g = (k + 1) / (feather + 1)
+        a[k, :] *= g
+        a[-(k + 1), :] *= g
+        a[:, k] *= g
+        a[:, -(k + 1)] *= g
+    a = a[..., None]
+    frame[ya:yb, xa:xb] = np.clip(fill * a + src * (1 - a), 0, 255).astype(np.uint8)
+    return frame
+
+
+def _seq_label_boxes(ocr_boxes, bx0, by0, bx1, by1):
+    """找出「贴在字幕板上方」的排名序号（#5 / 10 …）。
+
+    封面漏清 #5 的根因（2026-10-30 xWT127「封面还有个 #5」）：localization-plan
+    的 item bbox 只圈住了球员**名字板**，而原片的 ``#N`` 排名标签烧在板子正上方
+    另一行，于是整条片子清干净了、封面独独留着个 #5。
+
+    只认同时满足三条的框，避免把球衣号码（画面里随处可见的 15 / 34）当序号擦掉：
+      * 文本形如 ``#5`` / ``10``（纯数字，最多两位）；
+      * 水平中心落在字幕板 bbox 内（±8px）；
+      * 底边位于字幕板上边缘之上，且距离不超过板高的 1.5 倍。
+    """
+    out = []
+    bh = max(1, by1 - by0)
+    for (ox0, oy0, ox1, oy1, text) in ocr_boxes:
+        if not _SEQ_LABEL_RE.match(str(text).strip()):
+            continue
+        cx = (ox0 + ox1) / 2.0
+        if not (bx0 - 8 <= cx <= bx1 + 8):
+            continue
+        gap = by0 - oy1
+        if -5 <= gap <= 1.5 * bh:
+            out.append((ox0, oy0, ox1, oy1))
+    return out
+
+
 def clean_frame_with_plan(img, plan_items, frame_time=None, blur_radius=25,
                           blur_alpha=210, inpaint_radius=5):
     """按 localization-plan 清理封面帧上的中文/水印（与视频清理一致）
@@ -504,6 +574,12 @@ def clean_frame_with_plan(img, plan_items, frame_time=None, blur_radius=25,
             mask = np.zeros((h, w), dtype=np.uint8)
             mask[y0:y1, x0:x1] = 255
             frame = cv2.inpaint(frame, mask, inpaint_radius, cv2.INPAINT_TELEA)
+
+        # 序号标签：#N 烧在名字板正上方、不在 item bbox 内（2026-10-30 xWT127
+        # 「封面还有个 #5」）。用水平插值而不是 inpaint —— 它常压在球员身上，
+        # TELEA 会把下方地板拉上来填出一块亮补丁。
+        for sb in _seq_label_boxes(ocr_boxes, x0, y0, x1, y1):
+            frame = _hline_fill(frame, sb)
 
         cleaned_count += 1
 
@@ -626,6 +702,13 @@ def build_spec(headline: str, style: Dict[str, Any], plan: Dict[str, Any],
     ``headline`` / ``sub`` / ``stat`` / ``tagline``.
     """
     canvas = style.get("canvas") or {}
+
+    def _num(key: str, default: float) -> float:
+        """profile 里的数值可选项；0 是**合法值**（bg_blur: 0 = 关闭景深模糊），
+        所以用 None 判断而不是 ``or``。"""
+        v = style.get(key)
+        return default if v is None else float(v)
+
     return CoverSpec(
         headline=headline,
         sub=args.sub or plan.get("sub") or plan.get("subheadline") or "",
@@ -638,6 +721,24 @@ def build_spec(headline: str, style: Dict[str, Any], plan: Dict[str, Any],
         layout=style.get("layout") or "",
         canvas_w=int(canvas.get("width") or 1080),
         canvas_h=int(canvas.get("height") or 1920),
+        # 画质参数（2026-10-30）：以前这里只透传排版字段，画质全是 CoverSpec
+        # 的默认值 —— 于是在 profile 里写 bg_blur: 0 是不生效的，封面永远是
+        # "椭圆清晰 + 四周 8px 高斯模糊 + 整体压到 88% 亮度" 的那一版，
+        # 用户连着两条片子反馈「封面不清晰 / 画面是花的」都改不动它。
+        contrast=_num("contrast", 1.06),
+        saturation=_num("saturation", 0.78),
+        brightness=_num("brightness", 0.88),
+        sharpen=_num("sharpen", 1.15),
+        bg_blur=_num("bg_blur", 8),
+        bg_dim=_num("bg_dim", 0.72),
+        dof_x=_num("dof_x", 0.06),
+        dof_cy=_num("dof_cy", 0.55),
+        dof_ry=_num("dof_ry", 0.50),
+        vignette=int(_num("vignette", 170)),
+        backdrop_blur=_num("backdrop_blur", 36),
+        backdrop_dim=_num("backdrop_dim", 0.42),
+        backdrop_sat=_num("backdrop_sat", 0.55),
+        scrim=int(_num("scrim", 140)),
     )
 
 

@@ -122,6 +122,19 @@ cover_style:
   stack_anchor: split
   drop_rows: [sub, tag]
   safe_zone_side_pct: 0.07
+  # 画质（2026-10-30 用户：「这个封面不清晰」）-------------------------------
+  # 源片多是 720p（TikTok 转载源普遍 690kbps HEVC），封面要放大到 1080 宽
+  # 已经 1.5×，再叠引擎默认的「椭圆外 8px 高斯模糊 + 四周压暗到 72%」，
+  # 整幅就糊成一片灰。改成：关景深模糊（全幅清晰）、亮度/饱和拉回接近原片、
+  # 只留轻度锐化。想要旧「浅景深」风格可把 bg_blur 改回 6~8。
+  # ⚠️ 这些键由 generate_cover.build_spec 透传（0 是合法值，用 None 判断）。
+  bg_blur: 0          # 0 = 关闭椭圆景深模糊，整幅画面保持清晰
+  bg_dim: 1.0         # 只在 bg_blur>0 时作用；1.0 = 不再额外压暗背景
+  sharpen: 1.15
+  contrast: 1.08
+  brightness: 0.96
+  saturation: 0.95
+  vignette: 200       # 边缘留 78% 亮度（默认 170 会把四角压成黑）
 
 # BGM 风格偏好（不写死具体歌曲，只写风格方向）
 bgm_style:

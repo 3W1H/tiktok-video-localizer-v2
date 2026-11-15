@@ -18,6 +18,9 @@ description: >
   其中 **§8 是封面 / 品牌规格的唯一出处**。
 - **§13 是工程约束**（执行效率 / 并发上限 / 返工范围 / 沙箱与后台 / 时间与磁盘预算 /
   操作纪律）：**开跑前先过一遍 §13 的速查表**，这些是"不做就要重跑几小时"的硬约束。
+- **§17 是全批交付规范**（2026-11-15，42 条批次定稿）：当用户要求「只擦除中文 /
+  不加英文 / 全批处理」时，**本节优先级最高**，覆盖 §11 / §12 里「可以叠加英文
+  hook / title」的老做法。配套编排工具包见 `batch/README.md`。
 - **§12、§14–§16 是返工档案**：按批次记录的踩坑与修复。
   里面的**规范性规则已上提到 §1–§11 或 §13**，这些章节只在两种情况下需要读：
   ① 想知道「这条规则为什么这么定」② 排查同类问题的现场证据。
@@ -158,11 +161,201 @@ input/
                       ③ brand_text 必须渲染 ④ 人脸与实际文字区域重叠判定 ⑤ 封面帧已按 plan 清理
                       ⑥ 标题与品牌署名落在安全带内（主页网格只显示 9:16 的中间部分，见 §8.3）
                                           → qa.json
+  → double_check.py（**第二道独立确认**，见下面「交付前双检」一节）
+      ① cover_sanity   封面有没有「花」：糊块/豆腐块/出框/叠字/空白/比例
+      ② yellow_arrow   画面里有没有黄色三角箭头（≥2 帧同位置才算真箭头）
+      ③ chinese_residue 中文残留 2fps 复扫（相位与 qa 的整数秒错开）
+                                          → double-check.json
   → [Agent] 最终裁决：
        PASS    → 交付四件套
        WARNING → 交付 + 在回复中如实列出（降级项/低置信度保留项/timeline未解决项）
        FAIL    → 定位失败环节，修复重跑该 job（中间产物支持断点续跑），仍失败则如实上报
 ```
+
+## 交付前双检（double_check.py，2026-11-03 新增）
+
+`qa_video.py` 是**第一道**闸门（按 plan 执行 + 中文硬门禁）。它有四个结构性盲区，
+所以交付前必须再跑一次 `double_check.py` 做**独立第二道确认**：
+
+| qa_video 的盲区 | double_check 补什么 |
+|---|---|
+| 只查中文，**图形类残留**无感知 | `yellow_arrow`：扫全片找黄色三角箭头（源片指示箭头 / 播放键 / 贴纸） |
+| 封面只查中文+遮挡+安全带，**排版崩坏**看不出 | `cover_sanity`：糊、涂抹/糊块、豆腐块(□)、文字出框、叠字、空白、比例 |
+| 中文残留 1fps、整数秒相位，**短闪会漏** | `chinese_residue`：2fps 抽帧 + 隔帧 OCR（相位错开 0.5s），单帧低置信降级为候选 |
+| 中文门禁是 OCR，**logo/徽标里的图形化单字看不见**（连框都没有） | `cover visual review`：强制 Agent 目视封面 + `cover-review.json` 门禁（详见下节） |
+
+```bash
+# 单支（交付目录含 final.mp4 + cover.jpg）
+python scripts/double_check.py --output-dir output --json output/work/double-check.json \
+       --shots-dir /tmp/dc-shots
+# 只看视频 / 只看封面
+python scripts/double_check.py --video output/final.mp4
+python scripts/double_check.py --cover output/cover.jpg
+```
+
+**判读规则（照做，别自己发明）：**
+
+- `yellow_arrow` 的 `windows`（**≥6 抽样帧**＝持续 ≥3s、同位置）才算**真箭头**，必须抽帧目视确认；
+  `candidates`（<6 帧）是球衣/地板反光凑出来的三角形，**不构成问题**。
+  - 2026-11-03 重定口径（旧口径「≥2 帧」太松）：实测「保罗加索尔」底部那块东西
+    一度被我判成**「源片播放器 UI」**，**这是错的** —— 抽源片同帧放大后确认它是
+    **源账号水印「My篮球世界」**：红色圆角▶ + 白色描边中文 + 黄色药丸底
+    （bbox≈(215,1024,288,69)@720x1280；「多米尼克」同款在 (330,1541,428,95)@1080x1920）。
+    它不是 UI，所以**必须整块抹掉**，且属于「中文残留」问题。
+    旧检测器 4 条判据同时漏掉它：
+    ① `approxPolyDP` 只认 3 点 —— 圆角▶是 4 点；② `minAreaRect` 填充率 0.684 > 旧上限 0.66；
+    ③ `sat_mean` 172 勉强过 170，而部分帧只有 150；④ 旧确认门槛 2 帧。
+    修法：多 eps 退火取 3–4 点、4 点时合并最短边、`TRI_RECT_FILL_HI` 0.66→0.72、
+    `TRI_SAT_MIN` 170→140、确认门槛 2→**6 帧**，并新增**「周围是中性色」**判据
+    （水印/UI 箭头永远贴在深色/灰白条上，ring 中性占比 ≥0.45；球衣/地板的黄三角周围是彩色）。
+    放宽后误报从 12/24 支收敛到 2/24 支，且这 2 支是真的。
+- **字母 A 会被当成箭头**（2026-11-03 第二批实测）：「纯享」的品牌字 `HOOP DYNASTY DAILY`
+  稳定命中 **640 帧**、「运动天赋」的字幕 `MORE THAN POWER` 命中 42 帧 —— 全是我们自己
+  用黄色字画的英文，字母 A 本身就是个完美三角形，几何判据无解。
+  已加**第三层过滤**：bbox 中心落在**同帧 OCR 文字行**框内 → 判为字形，进
+  `text_glyphs_dropped` 并从 `windows` 剔除（每支只对窗口首帧跑一次 OCR，成本可忽略）。
+  仍无法自动排除的是**球场记分牌 logo 里的黄色球体**（「人类晃倒」实测命中 9 帧），
+  这类必须目视那张截图才能定性。
+- `cover_sanity` 的 `cover 中文残留` 用 **cjk_min=1**（单字也报）：封面文字是我们用英文字体
+  画的，出现任何单个汉字都只可能来自源画面 logo（实测「单挑称王」封面正中带一枚
+  红色途虎 logo，里面的「途」只有 1 个字，`has_chinese_text(min_chars=2)` 直接放过）。
+- `涂抹/糊块` 只是 **warning** 且只报面积 ≥1.2%、周围细节明显更多的块 —— 自动判定保守，
+  **必须目视 bbox** 再决定要不要重做封面。
+- `degraded`（OCR 不可用）**不算通过**，与 qa 同一纪律。
+
+### 抹水印别一律用 inpaint（2026-11-03 实测）
+
+`removal_method` 默认 `["inpaint"]`（TELEA）。当水印压在**强模糊背景带**（竖版视频的
+上下虚化填充区）上时，TELEA 从边界向内扩散会把水印**白描边**附近的亮像素带进填充区，
+留下一个比周围更亮的矩形补丁 —— 4K 屏一看就是块「糊」。实测「多米尼克」40s 处最明显：
+背景是大片高饱和黄，补丁亮度差 ~1.3%（`|Δmean|≈2.0`），肉眼可见。
+
+改用 **`removal_method: ["gradient"]`**：取 bbox 上下边缘各一行真实背景做逐列线性插值，
+不读取框内任何像素，边界颜色严格连续，再叠 9px 高斯。同一帧实测补丁消失。
+
+- 适用：水印/角标/字幕位于平滑渐变背景（虚化带、纯色底、渐变天空）
+- 不适用：框内是锐利主体（人物/球衣纹理），插值会抹平细节 —— 那种仍用 inpaint
+- 已经渲完的成品可以事后补：`harness/patch_region.py --video in.mp4 --out out.mp4 --box x,y,w,h`
+  （单次重编码、音轨 copy，1080p 约 1.5 分钟/百秒）
+
+#### 英文/手写水印：一样要去，而且要走「笔画级掩膜」（2026-11-13 定稿）
+
+**判据不是「是不是中文」，是「观众会不会觉得这是别人的片子」。**
+过去 `decisions.json` 里写过「拉丁字母不触发中文门禁，保留水印」——
+用户连续两条反馈直接指着截图问「这个视频还有水印呢」。所以：
+
+| 画面元素 | 处理 |
+|---|---|
+| 上传者手写签名/ID（`TONY-Zhong30`、`TMAC-Zhang30` 之类） | **必须去** |
+| 原片电视台标（TNT / ESPN / NBA TV） | 保留（是内容的一部分，去了反而假） |
+| 自家品牌条（`Hoop Dynasty Daily`） | 保留 |
+
+**做法：`scripts/delogo_static.py`（2026-11-13 升级过，别再用整框 inpaint）**
+
+```bash
+# 1) 先看响应图，确认位置固定、拿到 bbox（亮=全片固定的叠字）
+python scripts/delogo_static.py --input in.mp4 --hunt --save-map hunt.png
+
+# 2) 只生成掩膜，先确认像素数/覆盖率，不急着渲 5800 帧
+python scripts/delogo_static.py --input in.mp4 --bbox 470,478,818,565 \
+    --mask-only --save-mask mask.png
+
+# 3) 确认后渲染（音轨 copy，视频 crf17 重编码）
+python scripts/delogo_static.py --input in.mp4 --output out.mp4 \
+    --bbox 470,478,818,565
+```
+
+关键点（都是踩过的）：
+
+* **必须限制 bbox，且 bbox 只「包住」水印**。阈值在框内统计，框给大了掩膜就脏。
+* **掩膜用「top-hat + 逐像素中值」，不要用「高斯高通 + 平均」**。均值对高对比背景
+  （白球衣、白色场地线）同样敏感，会把掩膜扩成整片 → inpaint 出一条 350px 横带，
+  也就是用户说的「糊块」。实测同一段：均值方案 30k 像素糊成一片；
+  top-hat 中值方案 12601 像素、**覆盖水印笔画 100%**、bbox 不触选区边界。
+* **判据用「覆盖率」而不是「像素数」**：先手工/目视确认一版掩膜，再比 `ref 被覆盖 %`。
+  实测 `--thr 7` 覆盖 100%，Otsu 自动阈值只覆盖 **69%**（会留残笔）→ 所以默认用 7。
+* **别用光流跨帧补洞**。2–3s 一切的高光集锦，±1.5s 窗口跨镜头，
+  ROI 内 20–80 分位差中位数 **136**，可信样本率 <1%，硬用会把白球衣糊成深灰。
+* **量化验收（比目视可靠，建议每次都写进 post-edit.json）**：
+  - 掩膜区平均亮度 vs 周边 3px 环形区：修前 **+27.3** → 修后 **+1.6**
+  - 掩膜内最大亮度：254.8 → **206.3**（无纯白残留）
+  - 新旧帧差：框内 20.45 / **框外 3.06**（框外只是重编码噪声 ⇒ 改动确实只发生在框内）
+
+### 封面目视门禁（cover-review.json，2026-11-03）—— 别再指望 OCR 补这个洞
+
+**结论先说：图形化汉字（logo/徽标/艺术字里的单字）不是 OCR 能解决的问题。**
+实测证据（「单挑称王」封面正中那枚红底白「途」徽标）：
+
+| 尝试 | 结果 |
+|---|---|
+| 原图 RapidOCR | 4 行检测，全是英文标题，**徽标 0 命中** |
+| 2x / 3x 放大 | 0 命中（只是标题框变大） |
+| 徽标区域裁剪 4x | 0 命中 |
+| `det_db_box_thresh` 降到 0.1 / `det_limit_side_len` 1920 | 0 命中 |
+| 全图 Otsu 二值化 + 2x | 0 命中 |
+| 分块 Otsu（3x4 重叠块 + 3x） | 只框出 1 个无关单字，噪声 8 处 |
+| 时域静态区域检测（34 帧 std<6） | 徽标不是全片静态，检不出 |
+| 饱和色块 + 矩形度 徽标启发式 | 26 张封面全量误报（标题黄字本身就是饱和色块） |
+
+⇒ 把 `min_chars` 从 2 改成 1 只解决「大字单字」，**根本补不上这个洞**（连框都没有）。
+
+**所以这一层靠"看"**，是两个脚本共用的硬门禁：
+
+1. 交付前跑 `double_check.py --cover-mark`，产出带 `A1..F8` 网格的
+   `work/cover-check/cover-grid.jpg`；
+2. Agent **必须**逐张 `ViewImage` 看原图（不是缩略九宫格，小徽标会被压没），
+   确认「有没有汉字 / 中文徽标」；
+3. 把结论写进 `work/cover-review.json`：
+
+```json
+{"reviewer": "agent", "reviewed_at": "2026-11-03T10:20:00",
+ "cover_sha1": "<cover.jpg 的 sha1>", "cjk_seen": false,
+ "notes": "核对 A1-F8：标题/署名全英文，无中文徽标"}
+```
+
+4. `cjk_seen: true` → 门禁 **fail**；文件缺失 → **warning**（没查 ≠ 干净）；
+   封面重出后 sha1 变了 → **stale warning**（旧结论不能套新图）。
+
+`qa_video.check_cover` 也读这个文件：没有目视结论时它不会给 `pass`
+（避免 qa 的 `pass` 再次等价于「假 PASS」），并在返回里带
+`chinese_scope: "ocr_text_only; graphic glyphs need visual review"`。
+
+> 生成 sha1：`shasum -a 1 output/cover.jpg`
+
+### 视频关键帧目视门禁（frame-sheet.jpg + frame-review.json）
+
+同一类图形化汉字**在成片里也有**：实测「单挑称王」成品 74s 画面正中仍是那枚途虎徽标，
+而 `qa_video` 判 PASS（OCR 只看到英文标题）。整片逐帧看不可行，但**这类残留通常持续出现**，
+抽 6 帧就能撞见。
+
+```bash
+python scripts/double_check.py --output-dir output --frame-mark --json work/double-check.json
+# 看图后记录结论（sha1/mtime 不符会自动判 stale）
+python scripts/double_check.py --output-dir output --record-frame-review clean --notes "6 帧无中文徽标"
+```
+
+- 联览图：`work/cover-check/frame-sheet.jpg`（6 帧，含封面帧，左上角标秒数，默认每帧 **640px 宽**）
+- 门禁：`cjk_seen:true` → **fail**；文件缺失 → **warning**；成片重渲（size/mtime 变）→ **stale warning**
+- 实测收益：第一轮就看出了**源片播放器 UI 残留**（红▶+深色条+黄▶）在 4 支成品底部整段存在，
+  旧箭头检测器全部漏检 —— 见图即知，比调阈值快得多。
+
+**联览图分辨率是门禁的一部分，不是美观问题：**
+
+早期版本每帧只缩到 360px 宽，还保留 9:16 画布上下的大黑边 —— 有效像素只剩 360×200，
+赞助牌上的汉字糊成一个色块，Agent 看一眼只能写「无」，门禁形同虚设。现在：
+
+- 按**原生分辨率**抽帧 → `_crop_letterbox` 裁黑边 → `_crop_blur_bands` 裁「放大模糊填充」带
+  → 再缩到 `--sheet-w`（默认 640，低于 600 就别用了，看不清等于没看）
+- 竖版成片（720×1280 + 模糊填充）裁完只剩清晰正片区，汉字才认得出
+- 需要更高倍率复查某一帧时，别改全局参数，直接对这帧 `ffmpeg -ss` 抽原图按 bbox 放大 4 倍看
+
+**两条自测出来的阈值教训（改这个脚本前必读）：**
+
+1. 不要用「相邻行几乎相同」判涂抹：虚化背景（人群/球场 out-of-focus）本身就平滑，
+   首版把 21/21 张封面全判成「400px 行重复带」。
+2. 补 9:16 加的 letterbox 黑边也是平坦区，同样全量误报 —— 判涂抹必须叠加
+   **亮度落在 45–210**（排除黑边/高光）+ **周围细节显著更多**（ring/inner ≥ 2）。
+3. 图形检测一定要给「单帧 vs 持续」分档，否则每支片都甩 4 张截图给人类看，双检就废了。
 
 ## 关键规则
 
@@ -241,9 +434,64 @@ input/
 
 ### 3. 音频策略
 
+#### 3.0 先跑原声结构诊断（2026-11-13 新增，血的教训）
+
+**禁止从「没有中文解说」直接推出「丢原声」。** 先跑：
+
+```bash
+python scripts/analyze_source_audio.py --video input/source.mp4 --work-dir work
+# -> work/source-audio-profile.json: has_speech / speech_lang / has_music / recommended_strategy
+```
+
+它会分开回答两个问题：**有没有人在说话（任何语言）**、**有没有自带 BGM**。
+ASR 缺失或 `asr.json` 是 `skipped` 时，自己跑 whisper 采样补证（3×45s ≈ 60s）。
+
+**事故档案（3 条片子返工）**：
+
+| 片子 | 原声实际内容 | 旧流程动作 | 用户原话 |
+|---|---|---|---|
+| `乔丹经典战役_科比第三次` | 611s **英语现场解说 + 球馆**，原片无音乐 | 整轨删掉，铺 BGM 循环 611s | 「bgm 都是垃圾，如果原视频有 BGM 可以用原来的」 |
+| `乔丹40个经典时刻_四_` | 现场声 + 英语解说，无音乐 | 同上 | 「BGM 太单调了，也太没有意思了」 |
+| `60大创意扣篮` | 原声**从未被诊断过**（`asr.json` 是 skipped） | 铺 `Club Diver`（全程八分踩镲） | 「背景音乐一直是打镲很单调」 |
+
+前两条是同一个根因（把有内容的原声删了）；第三条是**取证缺失的连带后果** ——
+既然没听过原声，选曲就只能凭 BPM/能量盲选，于是选中了织体最平的曲子。
+
+**根因不是选曲，是取证缺失**，而且有两个互相掩盖的 bug：
+
+1. `analyze_narration.py` 只问「有没有**中文**解说」，答「否」后 job 直接判
+   `remove_original_bgm_only`。英语/粤语/无语言解说全部落进这个洞。
+2. **ASR 被主动跳过**：同一批 25 条里 **20 条** `asr.json` 是
+   `status: skipped, note: "batch uses remove_original_bgm_only (drops all original audio)"`。
+   「决定删原声 → 不跑 ASR → 没有证据反对删原声」形成闭环。
+   ⇒ **ASR 不允许因策略预判而跳过**（`jobs/analyze-video.job.md` Step 8 已写成硬规则）。
+3. 附带 bug：ASR 曾把 `language="zh"` 钉死，英语解说被强行按中文解码 ——
+   要么吐乱码汉字（误判「有中文旁白」→ 生成 TTS 覆盖原解说），要么吐空（→ 丢整轨）。
+   现在自动检测语言，`has_foreign_narration=true` 即表示「不许删原声」。
+
+**决策表**（以 `recommended_strategy` 为准）：
+
+| profile | strategy | 说明 |
+|---|---|---|
+| `has_speech` 且语言中文 | `mute_original_tts_bgm` | §12.3 硬门禁 |
+| `has_speech` 且语言非中文 | **`keep_original`** | 任何外语解说都不能丢 |
+| 无人声 + `has_music` | **`keep_original`** | 原片自带 BGM，用户口径「用原来的」 |
+| 无人声 + 无音乐 | `duck_original_add_bgm` | 纯现场声：压低 + 叠节奏 |
+| `null`（证据不足） | 先补 ASR / 人工听 15s | 不许猜 |
+
+`remove_original_bgm_only` 的合法触发条件**只剩一条**：用户明确要求换掉原曲/原声
+（例如「原声太吵，换个 BGM」）。
+
+**音乐判定的可用判据**：`20–150Hz` 能量占比。有贝斯/底鼓的曲子 **51–83%**，
+纯解说+场馆 **1–5%**（11 条素材实测）。**不要**试图用「谱峰重合率/谱平坦度」区分
+音乐与人声 —— 实测 611s 英语解说 repeat 0.625、Crunk Knight 0.625，完全重叠，
+这类特征只会给出看起来精确、实际随机的答案。
+
+---
+
 - **ASR 检测到中文旁白** → `mute_original_tts_bgm`：静音原轨 + 英文 TTS + Instrumental BGM
 - **无中文旁白，保留原声** → `keep_original`：完整保留原声（现场声/欢呼/环境音）
-- **无中文旁白，去掉原声换 BGM** ⭐ → `remove_original_bgm_only`：去掉原视频所有音频（篮球声+原BGM），只混合推荐的纯 BGM（无歌词）。适合篮球集锦类视频，节奏感更强
+- **无中文旁白，去掉原声换 BGM** → `remove_original_bgm_only`：去掉原视频所有音频（篮球声+原BGM），只混合推荐的纯 BGM（无歌词）。**仅限用户明确要求换原声时**；不要因为「没检出中文」就自动选它（见 §3.0）
   - ⚠️⚠️ **该分支曾经漏掉响度归一化（2026-10-16 修复）**。`_normalize_loudness()` 在
     `mute_original_tts_bgm` / `duck_original_add_bgm` 两个分支里都有，**只有本分支没有** ——
     于是 `audio-plan.json` 里写了 `"loudness_normalized": true` 也**被静默忽略**：
@@ -310,6 +558,30 @@ input/
          `Ready Aim Fire` **2.65** / `Cut and Run` 44.3。**罗斯那条最初选的
          `Ready Aim Fire` 是全库镲片第二重的曲目** —— 用这个指标选曲本可提前避开。
          选曲时同时看：`hat/kick` ≤ 0.8、kick 密度 ≥ 90/分、曲长 ≥ 片长、曲尾静音 ≈ 0。
+       - ⚠️ **「单调」是另一类问题，别用「刺耳」的指标去解（2026-11-13 新增）**。
+         用户说「一直是打镲很单调」「太单调了，也没意思」时，抱怨的是**结构平**，
+         不是高频多。但**「结构平」目前没有可靠的自动指标** —— 这条要记牢，
+         免得下次又造一个看起来很精确的伪指标：
+
+         | 尝试 | 实测 | 结论 |
+         |---|---|---|
+         | 6–16kHz 连续帧占比 | 10 首全落 0.27–0.95；`Club Diver` 0.921（被骂）vs `Crunk Knight` 0.927（被接受） | **零判别力**，测的是"有没有镲"而不是"镲有没有铺满全曲" |
+         | 5s 响度 SD | `Club Diver` 5.14 vs `Crunk Knight` 1.60，方向还与直觉相反 | 不可用 |
+         | 同小节自相似（自相关在循环周期处的峰） | `Club Diver` 81 小节循环 → 相似度 0.92 | **唯一有信号的**，但只对 loop 型素材有效 |
+
+         `analyze_bgm.py` 仍会输出 `monotony: {cymbal_frame_ratio, loudness_sd_5s,
+         verdict}`，但 `verdict` 默认 `review`（只在两端都极端时给 `likely_monotonous`）——
+         **不要拿它当门禁**。真正有效的判定是**做 6 首 ×15s 的同段 A/B 对比片**、
+         交给用户听（`_FIX-06-bgm-options.mp4` 就是这么来的，一次定案）。
+       - ✅ **长片（≥180s）选曲的硬约束，比任何"单调度指标"都管用**：
+         ① **曲长 ≥ 片长，绝不循环**；② 曲内有至少一次明显的全奏进入（drop / 副歌）；
+         ③ 前 60s 不能是同一段 loop 反复。三条都满足，用户几乎不会说"单调"。
+       - 🔴 **曲子比片子短时，宁可换曲也不要循环**。`aloop` 的循环体是**整曲**，
+         曲尾的淡出/数字静音会被原样搬进片中（用户听到「中间突然安静两秒」）。
+         2026-11-13 又发现 `duck_original_add_bgm` 分支是手搓的
+         `aloop=loop=-1,atrim`，**完全绕过 `bgm-plan.json`**（无 drop 对齐、无 atempo、
+         不跳曲首垫片）—— 已改为统一走 `build_bgm_track()`。凡是新增混音分支，
+         都必须复用 `build_bgm_track`，不许自己写 `aloop`。
     ⚠️ **一次要做完的两件收尾事**：① 换曲后 `generate_post.py` 必须重出 `tiktok-post.md`
     （署名是从 `audio-plan.json` 反查曲库生成的，**不重出就会写成上一首**）；
     ② 新曲要 `bgm_ledger.py add` 入册，否则 `generate_post.py` 只能兜底推断许可 ——
@@ -557,6 +829,19 @@ input/
 名字里的 `bgm_only` 说的是**产出**里只有 BGM，**不是**"只把 BGM 去掉"。
 所以它是"清干净中文"最稳的策略（无论 ASR 判定真假，成品都不含任何原始音频），
 **代价是现场氛围一起丢**，集锦片会显得干 —— 要保住现场氛围就用 `duck_original_add_bgm`（见上）。
+
+**⚠️ 对话戏误用此策略的坑（2026-11-03 实测，乔丹与大虫）**：
+
+源片开头 0-24s 是**中文对话戏**（人物对白，非旁白、非歌词），ASR (whisper base)
+把对白转成一堆乱码、与后面的中文歌歌词混在一起 → 被判成"全片中文流行歌" →
+整片走了 `remove_original_bgm_only`，**对话原声被整段抹掉**，用户明确不接受。
+
+规避动作（走此策略前必查）：
+1. 看 `timeline.json` 的 `text_zh`：若开头 segment 是**对话内容**（"嗨丹尼斯"这类对白，
+   而不是解说句式），别整片静音；
+2. 修复方式：从源片抽对应窗口的原声（该窗口与成片 1:1 映射时），`loudnorm I=-16:TP=-1.5`
+   归一后与 BGM 轨拼接（对话段结尾 0.4s 淡出、BGM 0.4s 淡入），视频流 copy 重封装即可，
+   不必整片重渲。本案产物记录在 audio-plan.json `strategy: hybrid_dialog_keep`。
 
 **✅ 关于 demucs / 声源分离（2026-09-28 更正 + 实测）**：
 
@@ -3073,6 +3358,16 @@ A 的标题贯穿全片，只在中间抽一帧也会漏判。
 - 出现 96000/192000 Hz 或单声道 → 判定为畸形容器，重跑 mix
 - 同时用 `ffmpeg -af volumedetect` 确认 `mean_volume` 在 -30 ~ -8 dB（过低=接近静音，0=爆音）
 
+**两个「不报错但会毁音质」的默认值（2026-11-13 修，都是 ffmpeg 侧的静默行为）**
+
+| 位置 | 默认行为 | 后果 | 正确做法 |
+|---|---|---|---|
+| AAC 编码器 | 本机 ffmpeg 5.0.1 的**内建 `aac`** 有增益偏差：−3.9 dBFS 的 WAV 编出来峰值 **0.0 dBFS** | 全片被抬 ~4dB 并削顶，高频发沙 | 用 **`aac_at`**（macOS AudioToolbox）；`audio_processor.pick_aac_encoder()` 已自动探测并回退 |
+| 混音中间 WAV | 默认 `pcm_s16le`，`amix normalize=0` 两路相加**超过 1.0 时按采样点硬裁** | 后续 loudnorm 拿到的已经是削平的波形，救不回来（实测 TP 冲到 **+0.1 dBFS**） | 中间文件一律 **`pcm_f32le`**（`MIX_WAV_CODEC`），削波只发生在最终 AAC 那一步，而 loudnorm 之前就把 TP 压到 −1.5 |
+
+另外 `amix` 别忘 `normalize=0`：默认会按输入路数相除，2 路各 −6dB，
+把 `audio-plan.json` 里算好的音量配比整体抵消（校验：混完再量一遍两路的相对电平）。
+
 ### 14.5 用户说"中文直接去掉"= `remove`，不要自作主张 `translate`
 
 **踩坑**：A 的中文标题被替换成英文 "WHO CAN STOP SHAQ?" 并渲染到全片 48 帧，用户要求"直接去掉，因为封面已经写了内容了"。
@@ -3363,3 +3658,204 @@ python scripts/originalize_video.py \
 - 动态字幕**四边都不贴边**（抽 0.7s / 中途 / 结尾三帧看）。
 - `ffprobe` 确认音频确实换了（码率/时长与源不同）。
 - 保留旧版备份，并在 `tiktok-post.md` 第 8 节写清改了什么，方便回溯与二次评估。
+
+---
+
+## 17. 全批交付规范（2026-11-15，42 条批次定稿）
+
+> **适用范围与优先级**：本节是用户 2026-11-14～15 逐条下达、并在 42 条全批交付中
+> 实测定稿的规则。当用户要求「只擦除中文 / 不要加英文 / 全批处理」时，**本节覆盖**
+> §11、§12 里「可以叠加英文 hook / title / 动态字幕」的老做法。单视频、明确要求
+> 做原创化的任务仍走 §11 / §16。
+>
+> 配套工具包：`batch/`（编排 / 自查 / 文案真源），用法见 `batch/README.md`。
+> 环境需 conda Python（cv2/PIL/numpy/yaml/rapidocr）+ `~/.local/bin/ffmpeg`。
+
+### 17.1 画面只擦除，不加任何新文字
+
+- 视频画面上（**尤其第一帧 / 片头**）不得新增任何英文说明、标题、hook、字幕或解释文字。
+  原来有中文，直接 inpaint / vblend 擦除即可，**不要补英文标题**。
+- 实现：`render_overlays.py --no-extra-text`（只抑制 title/hook/sub 的绘制，
+  mask 照常生成；watermark 槽的品牌标仍保留，QA 需要 `brand_text_rendered`）。
+- `localization-plan.json` 的译文**可以**进 `timeline.json` → `subtitles-en.srt` 作为
+  独立外挂字幕（不烧进画面）；封面 `cover.jpg` 的英文 headline / stat 属封面设计，
+  不受此规则约束。
+- 全批统一口径：`timeline.json` = `{"entries":[]}`、`subtitles-en.srt` **0 字节**、
+  `localization-plan.json` 全部 item 为 `watermark/remove` 且 `target_text=null`、
+  `agent-decisions.json` 的 `translations={}`。**逐条判断保留 SRT 的做法已作废**。
+
+### 17.2 字幕零重叠 / 零过大；颜色规范
+
+- 用户明确要求「字幕不得重叠、不得过大导致看不清」。外挂 SRT 的字号由播放器控制、
+  文件里限制不了，且会与原片自带硬字幕叠在同一底部区域 → **无法保证时优先清空 SRT**
+  （timeline 置 0 entries），零重叠风险。源片自带英文字幕属源内容，字号适中即可保留。
+- **黄色只给品牌标识，字幕一律白色** —— 定义处见 §8（唯一真源是
+  `profiles/nba.yaml` 的 `cover_style.fill_color`，`render_overlays.py::resolve_accent()`
+  读同一字段画封面主标题 / stat / 品牌署名 / 视频内 title·hook·logo）与 §12.5
+  （「字幕仍用白色」，白字 + 黑描边，黄字压在亮画面上会糊）。本节不复述定义。
+- 源片自带的白色烧录硬字幕**保留白色是正确的**；想统一改成黄色等于「在画面上加新
+  文字」，与 17.1 冲突，需用户另行明确。
+
+### 17.3 BGM / 解说决策树（严格按顺序，不许瞎加）
+
+| 原片情况 | 处理 |
+|---|---|
+| **带歌词的 BGM**（中文歌、有人声的音乐） | `demucs --two-stems=vocals -n htdemucs` 去掉人声，**保留原曲伴奏**：节奏 / drop / 编曲与剪辑天然一致 → `tts_keep_instrumental` + `work/instrumental.wav`。**不换第三方曲、不加 TTS** |
+| **中文解说** | 提取 / 分离原解说人声 → ASR 中文 → 英译 → 生成英文配音按**原解说时间轴**对齐，再与原伴奏混音；音色要自然，禁止机械 TTS 感 |
+| **英文解说 / 英文 BGM** | `keep_original`，直接复用原视频音轨，不叠任何东西 |
+| 以上都不是（无解说、无 BGM、只有现场噪声） | **才**自己加 BGM |
+
+自加 BGM 的硬要求：只用免版权 / CC BY 的本地曲库 `music/sports/`（Kevin MacLeod 等），
+发布文案如实署名；节奏必须跟剪辑节奏一致（BPM / 卡点 / 情绪起伏）；拒绝单调循环、
+刺耳音色、镲片 / hi-hat 高频过强或出现过于频繁；整体听感舒服、有动态、不抢画面。
+`batch/audio_policy.py` 只产出**建议**，不自动换曲、不自动静音；`batch/bgm_review.py`
+用曲库白名单 + 评分门禁（tempo_gap / hi_ratio / hi_trans_per_s / loopiness / dynamics）
+做候选评审，并有按「文件名 + mtime + size」为 key 的分析缓存。
+
+> ⛔ **禁止**把有歌词的原片整轨静音后换一首曲库音乐（2026-11-13 的做法，
+> 已被用户否定）。`verify_all.py` 的 `FORBIDDEN_OLD` 里保留 `mute_original_tts_bgm`
+> 作为违规策略。
+
+### 17.4 定点图形 / 贴纸清理
+
+用户会临时点名去掉某个画面元素（如白色骷髅头贴纸）。流程：
+
+1. 先用截图做模板 + 10fps 精测，确定静态 / 漂移、像素范围与**精确时间窗**，不要凭肉眼估计。
+2. 小面积不透明贴纸**不要用 TELEA 矩形 inpaint**（三角形放射涂抹）、不要形状 mask
+   （灰轮廓残留）、不要窄羽化（交叉骨白点）。
+3. 正确做法：`fill_method: vblend` + `vblend_bilinear: true` + `vblend_feather: 8`，
+   框比贴纸大一圈（贴纸距取样边 ≥20px），四边背景采样 + 羽化，且羽化基于
+   **inpaint 前的原始帧**。静态贴纸可 100% 消失、只留柔和景深虚化。
+4. 若周边有必须保留的元素（球衣号码 / 商标），改用**紧贴文字的小框** +
+   `bilinear=false` + `feather=14`，实测颜色最接近底色、边缘最柔和。
+   大框会把周边元素一起重绘成竖条纹。
+
+### 17.5 擦除糊带：v1 事故与 v2 正解
+
+**症状**：成片顶部 / 底部出现横向模糊渐变带（糊带）。QA 的 `chinese_residue`
+OCR 硬门禁只查「有没有中文」，**查不到擦除痕迹**，所以会全部判 pass 静默交付。
+
+**根因**：v1 把同一 (纵向带, x 桶) 里**所有时刻**的检测合并成一个静态 union 大框，
+出现 679×228、831×204、960×329（占画面 13–46%）且全程生效；
+`--large-region-fill` 对 `h>=80 且 w>=300` 走四边双线性 → 纯低频渐变、无真实纹理。
+
+**v2 正解**：`cleanup_items_v2()` = **连续时间段覆盖 + 每个检测单独小框**。
+2s 桶方案虽无糊带但 OCR 采样有洞会漏中文；v2 用连续 seg 保证全程覆盖，
+seg 内 `merge_dupes()` 只折叠同一文字的重复检出（IoU≥0.30）。漂移水印才走
+2s 桶跟随（水平漂移 >18% 帧宽且命中 ≥6 次）。`render_flags` 改为 `[]`，
+**不再传 `--large-region-fill`**。
+
+**尺寸门禁的血泪教训**：限制要卡 **面积(5%) + 高度(22% 帧高)**，**不能卡宽度**。
+中文标题常是「宽而扁」的一行（811×38、659×49），把 `MAX_W` 设成 `0.6fw`
+会把主标题整个丢弃 → 中文残留。糊带元凶是又宽又高的块，`MAX_W` 最终设 `0.92fw`。
+
+**第二起事故**：`run_queue.py::repair_from_qa()` 把 QA 残留 group 的 union bbox
+直接加 14px 生成补框，**绕过 v2 尺寸门禁**，再次产生大框 TELEA 涂抹。已加防护：
+
+```python
+if (y1 - y0) > 0.22 * fh or (x1 - x0) * (y1 - y0) > 0.05 * fw * fh:
+    skipped += 1   # 记日志「would cause smear; use per-text OCR boxes instead」
+    continue
+```
+
+**自查门禁按「高 AND 宽」不按面积**：`verify_all.py` 只把
+`fill_method != vblend` 且 `h>=25%fh **且** w>=45%fw` 的框判 `SMEAR_RISK`。
+单看面积会误报 916×106、596×116 这类宽而扁的安全逐文字行。
+**规则门禁必须限定在 `delivered`（四件套齐全）条目上**，否则「文件不存在 = -1」
+会被误报成 SRT 非空 / 封面黄缺失；未完成条目用 `pending` 单列。
+
+### 17.6 时间窗 padding 与纯黑片头
+
+- `render_overlays.py` 的 `PAD_HEAD=0.5` / `PAD_TAIL=0.35` 会在渲染时**再扩窗**。
+  想「只擦第 0 帧」，把 `end_time` 设 0.35，实际生效到 0.70s。收紧单帧擦除前
+  先算 `[start-0.5, end+0.35]`。
+- **OCR 证据优先于肉眼**：某条标题只在 `t=0.0` 出现 1 帧，但清理框设了 0–1.5s，
+  之后持续擦人物白色队服 → 首帧黑斑。对齐 `ocr.json` 的检测时刻分布再定时间窗。
+- **纯黑片头直接置黑，别用 vblend 四边采样**：会采到黄色标题颜色产生彩色模糊残影，
+  且窗口若超出黑卡会误作用到正片形成竖向灰白渐变带。做法是 ffmpeg
+  `drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill:enable='lt(t,1.32)'`
+  + `-c:v libx264 -preset veryfast -crf 16 -c:a copy`（音频原样保留）。
+  边界必须先逐帧测亮度确认（`dark_ratio`），再决定 `lt(t, ...)`。
+
+### 17.7 QA 规 3 与目视确认纪律
+
+- `qa_video.py` 规 3 `sparse_low_conf_graphic_badge`：`conf<0.65`、`<=5 帧`、
+  `<=3 字`、跨度 `>=20s` 的组判为**固定频道角标图形误读**，降级并记入
+  `misreads_dropped`（不是静默丢弃）。真烧录字幕 conf≥0.90 且 1fps 连续命中，
+  不会命中此规则。全批同类角标一律保留以保持一致。
+- ⚠️ **加规则前必须抽帧目视确认**：把源片与成片同框、放大到原生分辨率对比，
+  确认「右列真的没有中文、只是图形被误读」再写降级逻辑。
+- `single_char_suspects` 会把高置信单字降级为 warning，**不触发自动补框**，
+  历史上漏过真实的黄色中文单字 → 必须人工目视复核，不能只看 `status`。
+- **擦除痕迹的物理边界**：亮色描边中文艺术字压在复杂 / 暗背景上，无生成式
+  video inpainting 时必然留低频渐变。`chunks TELEA` 产生彩色菱形斑、
+  `stroke-mask` 漏黑色描边，都不如整框 TELEA / vblend。
+  **判定顺序恒为：先目视确认画面干净，再调整门禁，绝不先放宽标准再看结果。**
+
+### 17.8 发布文案必须逐条撰写（禁止模板）
+
+- ⛔ **禁止**用批量模板生成 `tiktok-post.md` 的 Video Summary / Caption /
+  Hashtags / Pinned Comment。只换 headline 会让几十条文案结构完全相同，
+  且自造大写标签（如 `#WHENITWASFUN`）不是 TikTok 真实搜索标签。
+  2026-11-13 批次的模板曾让 `#NBAClassics` 出现 40/40、`#NBA` 39/40，
+  Pinned Comment 31 条一字不差。
+- Summary **只写视频内容本身**（谁 / 哪场比赛 / 什么赛季 / 什么动作 / 什么数据），
+  **不放制作说明**（尤其禁止 `Erase-only localization.`）—— 见规则 1b。
+- Hashtags **恰好 5 个**，必须是真实、与该条内容强相关的标签（球员全名 / 球队 /
+  赛事 / 具体动作），禁止 `#fyp` `#viral` `#ForYou`。
+  Pinned Comment 要针对**这条视频**提问，不能全批都问同一句。
+- **事实来源优先级**：`源文件名 > 该条 OCR/ASR > cover headline`。
+  `COVER` 是人工批量映射，可能写错（某条实为欧文篮网集锦、另一条实为科比离世
+  怀念混剪），照它写会写错内容。
+- 真源：`batch/rewrite_posts.py` 的 `COPY` 表 → `--export` 产出
+  `diag/post-copy.json` → `auto_decide.py` 按 idx 读取。**新视频必须先在 COPY
+  里逐条撰写**；未撰写时批量脚本回退模板并打印 WARNING，交付前必须补上。
+  改文案后用 skill 自带 `scripts/generate_post.py` 重渲九段结构，
+  **不要手改 md**（会丢 BGM 署名 / 发布时间 / 处理报告）。
+
+### 17.9 全批编排与长时运维
+
+- `batch/run_queue.py`：幂等、可续跑（四件套齐全且 QA 中文残留非 fail 即跳过），
+  日志 + 失败记录 + 状态 + 台账齐全；`--force` 用于 v2 返工。
+- **双 worker 奇偶分片**：4 核 8 线程机器上 2 路已接近饱和，再加并发只会更慢。
+  所有共享 JSON 的读改写都经 `fcntl.flock` 的 `shared_lock()`，避免相互覆盖。
+- **机器重启会杀掉全部后台任务**：worker / finalizer 都无开机自启。恢复流程 =
+  查 `kern.boottime` / `queue-status.json` / `pgrep`，把渲染中断留下的无 moov
+  `cleaned.mp4` 改名 `.broken-restart`，按剩余条目重新奇偶分片启动，最后重启收尾器。
+  队列幂等，`analyze` 命中 probe / text-tracks / asr 缓存会跳过整套 OCR。
+- **磁盘是硬约束**：`disk_guard.py` 回收已交付条目的 `work/frames/**/*.png`
+  + 冗余 `cleaned.mp4`（mix 用 `-c:v copy`，final 已是同一视频流）。
+  **绝不能删待返工条目的帧**：`generate_cover.py` 返工时要按 `frames-index.json`
+  路径给封面候选帧打分。返工名单动态判定（`auto_plan_items` 且 `render_flags`
+  含 `--large-region-fill`）。
+- **不要为提速改 x264 preset**：`ultrafast` 编码快 3 倍、画质无损
+  （PSNR 46.5dB / SSIM 0.993），但体积膨胀 3.3 倍会撑爆磁盘。
+  保持 `veryfast` + CRF18 + `--x264-threads 4`。
+- **守护进程随任务起、随任务停**：`disk_guard.py` 全批完成即自退，
+  只有 `--keep-alive` 才常驻；收尾后 `pgrep` 复查，不留 resident 进程。
+- **批量快速路径**：`render_overlays.py` 只读 `masks/masks-index.json` 的 bbox +
+  时间窗，而 `generate_masks.py` 默认对每个 item 做 6 次视频随机寻帧并写全帧 PNG
+  （584 项时 16 分钟零产出）。批量模式改用 `write_fast_masks()` 直接生成索引；
+  `auto_decide.py` 已给 OCR union 框加 8px padding，漏掉的中文由 QA 硬门禁 +
+  `repair_from_qa()` 兜底。dense 取证采样 5fps → 2fps（清理按 2s 桶工作，够用）。
+- **质量边界**：逐条人工目视 / 语义决策被自动化替代后，**图形化中文、非中文
+  logo、贴纸**这类 OCR 漏检项无法自动发现；必须另做全批抽帧目视复核。
+
+### 17.10 交付前最终自查清单
+
+`batch/verify_all.py` 逐条核对并输出 `diag/final-verification.json` + `FINAL-REPORT.md`：
+
+1. 四件套齐全（`final.mp4` / `cover.jpg` / `subtitles-en.srt` / `tiktok-post.md`）。
+2. R1：timeline 0 entries、SRT 0 字节、plan 无 `target_text`（画面零新增文字）。
+3. R2：`audio-policy.json` 的 case → strategy 符合 17.3 决策树，无违规旧策略。
+4. R3：封面品牌黄像素占比正常（实测 4.8–5.7%）。
+5. 中文残留 1fps 全片 + 首尾加密：`0 fail`；warning 必须逐条目视确认。
+6. `SMEAR_RISK=[]`、`queue_failures=[]`、`not_in_ledger=[]`、`pending=[]`。
+7. 42/42 登记 `processed-videos.json`；`-done` 后缀容忍（`paths()` 与台账匹配
+   都要兜底，否则误报 pending / 未登记）。
+8. 抽帧目视复核：源片 vs 成片同框对比顶部 / 底部 / 片头，确认无糊带、无残字、
+   无竖条纹、无灰白块。**规则检查查不出擦除痕迹**，这一步不能省。
+
+> 2026-11-15 实测结果：42/42 DELIVERED、`verify_all rc=0`、0 失败、
+> 中文残留 40 pass / 2 warning（均为目视确认误报）/ 0 fail。
+

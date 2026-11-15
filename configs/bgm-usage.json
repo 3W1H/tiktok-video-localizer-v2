@@ -119,11 +119,17 @@
           "output_dir": "/Users/jason/Downloads/tiktok/科比_03_季后赛一些进攻集锦_科比_xWT156-done",
           "profile": null,
           "used_at": "2026-10-16T09:40:02Z"
+        },
+        {
+          "video": "/Users/jason/Downloads/tiktok/力吞山河_气势磅礴_大鲨鱼奥尼尔之原始天赋扣篮_途虎养车AP",
+          "output_dir": "/Users/jason/Downloads/tiktok/力吞山河_气势磅礴_大鲨鱼奥尼尔之原始天赋扣篮_途虎养车AP",
+          "profile": "nba",
+          "used_at": "2026-11-06T02:32:21Z"
         }
       ],
-      "count": 2,
+      "count": 3,
       "first_used_at": "2026-09-28T14:26:57Z",
-      "last_used_at": "2026-10-16T09:40:02Z"
+      "last_used_at": "2026-11-06T02:32:21Z"
     },
     "griphop": {
       "display": "Griphop.mp3",
@@ -245,11 +251,17 @@
           "output_dir": "/Users/jason/Downloads/tiktok/全世界都忘了莫兰特有多强_文班亚马_科比_艾弗森_麦迪_詹姆",
           "profile": null,
           "used_at": "2026-10-15T22:51:54Z"
+        },
+        {
+          "video": "60大创意扣篮_二_看看有没有你喜欢的扣篮动作_乔丹_科比",
+          "output_dir": "/Users/jason/Downloads/tiktok/60大创意扣篮_二_看看有没有你喜欢的扣篮动作_乔丹_科比",
+          "profile": "sports",
+          "used_at": "2026-11-13T08:09:35Z"
         }
       ],
-      "count": 1,
+      "count": 2,
       "first_used_at": "2026-10-15T22:51:54Z",
-      "last_used_at": "2026-10-15T22:51:54Z"
+      "last_used_at": "2026-11-13T08:09:35Z"
     },
     "fasterdoesit": {
       "display": "Faster Does It.mp3",
@@ -301,11 +313,17 @@
           "output_dir": "/Users/jason/Downloads/tiktok/雷阿伦生涯十佳球_NBA_篮球_雷阿伦_十佳球_xWT128",
           "profile": null,
           "used_at": "2026-10-15T22:51:54Z"
+        },
+        {
+          "video": "/Users/jason/Downloads/《绝代双骄》回顾戈登与拉文扣篮大赛，真是神仙打架，不分伯仲#拉文扣篮大赛#戈登扣篮大赛#拉文#戈登_xWT126.mp4",
+          "output_dir": "/Users/jason/Downloads/tiktok/绝代双骄_回顾戈登与拉文扣篮大赛_真是神仙打架_不分伯仲_拉",
+          "profile": "nba",
+          "used_at": "2026-10-30T11:20:42Z"
         }
       ],
-      "count": 1,
+      "count": 2,
       "first_used_at": "2026-10-15T22:51:54Z",
-      "last_used_at": "2026-10-15T22:51:54Z"
+      "last_used_at": "2026-10-30T11:20:42Z"
     },
     "cutandrun": {
       "display": "Cut and Run.mp3",
@@ -348,7 +366,403 @@
       "count": 1,
       "first_used_at": "2026-10-16T10:23:07Z",
       "last_used_at": "2026-10-16T10:23:07Z"
+    },
+    "cortosis": {
+      "display": "Cortosis.mp3",
+      "uses": [
+        {
+          "video": "/Users/jason/Downloads/#JaylenBrown #CarmeloAnthony #HassanWhiteside #凯尔特人 #开拓者 #NBA名场面#HoopReel_xWT126.mp4",
+          "output_dir": "/Users/jason/Downloads/tiktok/JaylenBrown_CarmeloAnthony_Has",
+          "profile": "nba",
+          "used_at": "2026-10-30T11:20:39Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-10-30T11:20:39Z",
+      "last_used_at": "2026-10-30T11:20:39Z"
+    },
+    "hotpursuit": {
+      "display": "Hot Pursuit.mp3",
+      "uses": [
+        {
+          "video": "/Users/jason/Downloads/球场上跃动的精灵，永不言弃的斗士，一代人青春里永远的“答案”。#艾弗森 #阿伦艾弗森 #96黄金一代 #NBA传奇 #篮球混剪_xWT111.mp4",
+          "output_dir": "/Users/jason/Downloads/tiktok/球场上跃动的精灵_永不言弃的斗士_一代人青春里永远的_答案",
+          "profile": "nba",
+          "used_at": "2026-10-30T11:20:39Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-10-30T11:20:39Z",
+      "last_used_at": "2026-10-30T11:20:39Z"
+    },
+    "neolith": {
+      "display": "Neolith.mp3",
+      "uses": [
+        {
+          "video": "/Users/jason/Downloads/抛开情怀滤镜，枪王这球能否与神媲美？#迈克尔乔丹 #拉杆换手上篮#莫兰特_xWT127.mp4",
+          "output_dir": "/Users/jason/Downloads/tiktok/抛开情怀滤镜_枪王这球能否与神媲美_迈克尔乔丹_拉杆换手上篮",
+          "profile": "nba",
+          "used_at": "2026-10-30T11:20:40Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-10-30T11:20:40Z",
+      "last_used_at": "2026-10-30T11:20:40Z"
+    },
+    "stoneworldbattle": {
+      "display": "Stoneworld Battle.mp3",
+      "uses": [
+        {
+          "video": "/Users/jason/Downloads/“那一年 哈利波顿选择了弹幕最多的打法.”#哈利波顿_xWT126.mp4",
+          "output_dir": "/Users/jason/Downloads/tiktok/那一年_哈利波顿选择了弹幕最多的打法_哈利波顿_xWT126",
+          "profile": "nba",
+          "used_at": "2026-10-30T11:20:40Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-10-30T11:20:40Z",
+      "last_used_at": "2026-10-30T11:20:40Z"
+    },
+    "welcometotheshow": {
+      "display": "Welcome to the Show.mp3",
+      "uses": [
+        {
+          "video": "/Users/jason/Downloads/正是因为库里的特殊，所以才开启了小球时代 #NBA #金州勇士 #库里_xWT126.mp4",
+          "output_dir": "/Users/jason/Downloads/tiktok/正是因为库里的特殊_所以才开启了小球时代_NBA_金州勇士",
+          "profile": "nba",
+          "used_at": "2026-10-30T11:20:40Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-10-30T11:20:40Z",
+      "last_used_at": "2026-10-30T11:20:40Z"
+    },
+    "blownaway": {
+      "display": "Blown Away.mp3",
+      "uses": [
+        {
+          "video": "/Users/jason/Downloads/Shaquille Rashaun O'Neal_湖人34号｜奥尼尔_禁区统治者_OK组合_三连冠王朝_大鲨鱼，永不褪色_#奥尼尔集锦 #湖人经典OK组合 #NBA老球痞 #篮球混剪 #ShaquilleONeal#NBA传奇#紫金王朝_#HoopReel.mp4",
+          "output_dir": "/Users/jason/Downloads/tiktok/Shaquille_Rashaun_O_Neal_湖人34号",
+          "profile": "nba",
+          "used_at": "2026-10-30T11:20:41Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-10-30T11:20:41Z",
+      "last_used_at": "2026-10-30T11:20:41Z"
+    },
+    "unity": {
+      "display": "Unity.mp3",
+      "uses": [
+        {
+          "video": "/Users/jason/Downloads/1996-2004湖人岁月，Shaquille O'Neal，大鲨鱼奥尼尔。_紫金时代最无解的中锋，和科比组成OK组合，拿下三连冠。_摧枯拉朽的篮下进攻，每记扣篮都震撼人心。一代人心中的内线天.mp4",
+          "output_dir": "/Users/jason/Downloads/tiktok/1996_2004湖人岁月_Shaquille_O_Neal",
+          "profile": "nba",
+          "used_at": "2026-10-30T11:20:41Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-10-30T11:20:41Z",
+      "last_used_at": "2026-10-30T11:20:41Z"
+    },
+    "cyborgninja": {
+      "display": "Cyborg Ninja.mp3",
+      "uses": [
+        {
+          "video": "/Users/jason/Downloads/30☠️☠️☠️_xWT128.mp4",
+          "output_dir": "/Users/jason/Downloads/tiktok/30_xWT128",
+          "profile": "nba",
+          "used_at": "2026-10-30T11:20:41Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-10-30T11:20:41Z",
+      "last_used_at": "2026-10-30T11:20:41Z"
+    },
+    "aggressor": {
+      "display": "Aggressor.mp3",
+      "uses": [
+        {
+          "video": "/Users/jason/Downloads/那些年，看过詹韦连线的人都过30了吧#NBA#篮球#热火#詹姆斯#韦德_xWT126.mp4",
+          "output_dir": "/Users/jason/Downloads/tiktok/那些年_看过詹韦连线的人都过30了吧_NBA_篮球_热火_詹",
+          "profile": "nba",
+          "used_at": "2026-10-30T11:20:41Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-10-30T11:20:41Z",
+      "last_used_at": "2026-10-30T11:20:41Z"
+    },
+    "deathandaxes": {
+      "display": "Death and Axes.mp3",
+      "uses": [
+        {
+          "video": "/Users/jason/Downloads/德雷克斯勒生涯十大扣篮 #NBA #篮球 #扣篮 #德雷克斯勒 #滑翔机_xWT127.mp4",
+          "output_dir": "/Users/jason/Downloads/tiktok/德雷克斯勒生涯十大扣篮_NBA_篮球_扣篮_德雷克斯勒_滑翔",
+          "profile": "nba",
+          "used_at": "2026-10-30T11:20:42Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-10-30T11:20:42Z",
+      "last_used_at": "2026-10-30T11:20:42Z"
+    },
+    "longtimecoming": {
+      "display": "Long Time Coming.mp3",
+      "uses": [
+        {
+          "video": "/Users/jason/Downloads/I'm unstoppable!#勒布朗詹姆斯#世纪翻盘#天神下凡#骑士2.0_xWT126.mp4",
+          "output_dir": "/Users/jason/Downloads/tiktok/I_m_unstoppable_勒布朗詹姆斯_世纪翻盘_天神",
+          "profile": "nba",
+          "used_at": "2026-10-30T11:20:42Z"
+        },
+        {
+          "video": "乔丹40个经典时刻_四_最好看的投篮姿势_当年偷偷学了好久",
+          "output_dir": "/Users/jason/Downloads/tiktok/乔丹40个经典时刻_四_最好看的投篮姿势_当年偷偷学了好久",
+          "profile": "nba",
+          "used_at": "2026-11-13T11:31:20Z"
+        }
+      ],
+      "count": 2,
+      "first_used_at": "2026-10-30T11:20:42Z",
+      "last_used_at": "2026-11-13T11:31:20Z"
+    },
+    "malicious": {
+      "display": "Malicious.mp3",
+      "uses": [
+        {
+          "video": "183cm的篮球天花板",
+          "output_dir": null,
+          "profile": "nba",
+          "used_at": "2026-11-02T12:14:11Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-11-02T12:14:11Z",
+      "last_used_at": "2026-11-02T12:14:11Z"
+    },
+    "clenchedteeth": {
+      "display": "Clenched Teeth.mp3",
+      "uses": [
+        {
+          "video": "只有罗德曼才能做到",
+          "output_dir": null,
+          "profile": "nba",
+          "used_at": "2026-11-02T12:14:12Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-11-02T12:14:12Z",
+      "last_used_at": "2026-11-02T12:14:12Z"
+    },
+    "clubdiver": {
+      "display": "Club Diver.mp3",
+      "uses": [
+        {
+          "video": "无奖竞猜",
+          "output_dir": null,
+          "profile": "nba",
+          "used_at": "2026-11-02T12:14:12Z"
+        },
+        {
+          "video": null,
+          "output_dir": "/Users/jason/Downloads/tiktok/60大创意扣篮_二_看看有没有你喜欢的扣篮动作_乔丹_科比",
+          "profile": null,
+          "used_at": "2026-11-06T23:36:38Z"
+        }
+      ],
+      "count": 2,
+      "first_used_at": "2026-11-02T12:14:12Z",
+      "last_used_at": "2026-11-06T23:36:38Z"
+    },
+    "obliteration": {
+      "display": "Obliteration.mp3",
+      "uses": [
+        {
+          "video": "斯台普斯的传奇",
+          "output_dir": null,
+          "profile": "nba",
+          "used_at": "2026-11-02T12:14:13Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-11-02T12:14:13Z",
+      "last_used_at": "2026-11-02T12:14:13Z"
+    },
+    "grimidol": {
+      "display": "Grim Idol.mp3",
+      "uses": [
+        {
+          "video": "8090共同的回忆之 火箭麦",
+          "output_dir": null,
+          "profile": "nba",
+          "used_at": "2026-11-02T12:14:13Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-11-02T12:14:13Z",
+      "last_used_at": "2026-11-02T12:14:13Z"
+    },
+    "unlight": {
+      "display": "Unlight.mp3",
+      "uses": [
+        {
+          "video": "科比退役10周年",
+          "output_dir": null,
+          "profile": "nba",
+          "used_at": "2026-11-02T12:14:14Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-11-02T12:14:14Z",
+      "last_used_at": "2026-11-02T12:14:14Z"
+    },
+    "scattershot": {
+      "display": "Scattershot.mp3",
+      "uses": [
+        {
+          "video": "乔丹The shot绝杀骑士37周年",
+          "output_dir": null,
+          "profile": "nba",
+          "used_at": "2026-11-02T12:14:14Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-11-02T12:14:14Z",
+      "last_used_at": "2026-11-02T12:14:14Z"
+    },
+    "crusade": {
+      "display": "Crusade.mp3",
+      "uses": [
+        {
+          "video": "乔丹与大虫的精彩配合",
+          "output_dir": null,
+          "profile": "nba",
+          "used_at": "2026-11-02T13:50:53Z"
+        },
+        {
+          "video": "科比_用历史最强的硬解能力击败了凯尔特人四巨头_篮球_nba",
+          "output_dir": "/Users/jason/Downloads/tiktok/科比_用历史最强的硬解能力击败了凯尔特人四巨头_篮球_nba",
+          "profile": "nba",
+          "used_at": "2026-11-13T09:23:53Z"
+        }
+      ],
+      "count": 2,
+      "first_used_at": "2026-11-02T13:50:53Z",
+      "last_used_at": "2026-11-13T09:23:53Z"
+    },
+    "tripsit": {
+      "display": "Trips It.mp3",
+      "uses": [
+        {
+          "video": "乔丹这两个球哪个更难",
+          "output_dir": null,
+          "profile": "nba",
+          "used_at": "2026-11-02T13:50:53Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-11-02T13:50:53Z",
+      "last_used_at": "2026-11-02T13:50:53Z"
+    },
+    "firebrand": {
+      "display": "Firebrand.mp3",
+      "uses": [
+        {
+          "video": "纯享 历史 乔丹的进攻",
+          "output_dir": null,
+          "profile": "nba",
+          "used_at": "2026-11-02T13:50:54Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-11-02T13:50:54Z",
+      "last_used_at": "2026-11-02T13:50:54Z"
+    },
+    "deepanddirty": {
+      "display": "Deep and Dirty.mp3",
+      "uses": [
+        {
+          "video": "人 类 晃 倒 精 华",
+          "output_dir": null,
+          "profile": "nba",
+          "used_at": "2026-11-02T13:50:54Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-11-02T13:50:54Z",
+      "last_used_at": "2026-11-02T13:50:54Z"
+    },
+    "furiousfreak": {
+      "display": "Furious Freak.mp3",
+      "uses": [
+        {
+          "video": "以前的篮球有多激烈",
+          "output_dir": null,
+          "profile": "nba",
+          "used_at": "2026-11-02T15:03:48Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-11-02T15:03:48Z",
+      "last_used_at": "2026-11-02T15:03:48Z"
+    },
+    "corruption": {
+      "display": "Corruption.mp3",
+      "uses": [
+        {
+          "video": "大虫从来就没有怂过",
+          "output_dir": null,
+          "profile": "nba",
+          "used_at": "2026-11-02T15:03:48Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-11-02T15:03:48Z",
+      "last_used_at": "2026-11-02T15:03:48Z"
+    },
+    "outfoxingthefox": {
+      "display": "Outfoxing the Fox.mp3",
+      "uses": [
+        {
+          "video": "所有人 接近神",
+          "output_dir": null,
+          "profile": "nba",
+          "used_at": "2026-11-02T15:03:49Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-11-02T15:03:49Z",
+      "last_used_at": "2026-11-02T15:03:49Z"
+    },
+    "hallofthemountainking": {
+      "display": "Hall of the Mountain King.mp3",
+      "uses": [
+        {
+          "video": "力吞山河 大鲨鱼奥尼尔",
+          "output_dir": null,
+          "profile": "nba",
+          "used_at": "2026-11-02T15:03:49Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-11-02T15:03:49Z",
+      "last_used_at": "2026-11-02T15:03:49Z"
+    },
+    "riptide": {
+      "display": "Riptide.mp3",
+      "uses": [
+        {
+          "video": "单挑称王",
+          "output_dir": null,
+          "profile": "nba",
+          "used_at": "2026-11-02T15:03:49Z"
+        }
+      ],
+      "count": 1,
+      "first_used_at": "2026-11-02T15:03:49Z",
+      "last_used_at": "2026-11-02T15:03:49Z"
     }
   },
-  "_updated_at": "2026-10-16T10:23:07Z"
+  "_updated_at": "2026-11-13T11:31:20Z"
 }

@@ -2,9 +2,41 @@
 
 ## 环境问题
 
+### ffmpeg 命令"永远不结束"（抽帧/转码卡死）
+**症状**：脚本停在 `抽帧中…` 不动，`timeout` 杀掉才退出；同一条 ffmpeg 命令在终端手跑
+却 1 秒完成。用 `sample <pid>` 采样可见进程阻塞在 `subprocess.communicate()`。
+
+**原因**：ffmpeg 默认会读 stdin（交互按键）。当父进程由 Agent / cron / CI 拉起、stdin 是
+一个没人写的管道时，ffmpeg 读 stdin 会**永久阻塞** —— 与磁盘、权限、视频文件都无关。
+
+**解决**：`subprocess.run(..., stdin=subprocess.DEVNULL)`（`common.run()` 已默认这样），
+或命令里加 `-nostdin`。手工排查时先跑
+`ffmpeg -nostdin -y -v error -f lavfi -i testsrc=size=160x120:rate=1 -frames:v 1 /tmp/t.jpg`
+—— 加 `-nostdin` 能出图，就能确诊是这个问题。
+
+### `--output` 生效了，但 work 目录跑到了别处（重跑时「跳过一切」）
+**症状**：对 `/tmp/xxx/clean.mp4` 这类**不在原始素材目录**的视频跑
+`run_pipeline.py --input /tmp/xxx/clean.mp4 --output /Users/me/Downloads/tiktok/<folder>`，
+日志里的 `Output:` 显示正确，日志末尾也列出 `✅ final.mp4`，但 `<folder>/work` 里
+**一个分析产物都没有**；紧接着 `apply.py` 报 `MISSING work dir`，再跑一次则直接
+`⏭ SKIP (already processed)`，成品仍是旧文件（mtime 没变）。
+
+**原因**：`--work-dir` 的默认值是 `<视频所在目录>/tiktok/<视频名>/work`，
+`--output` **只决定最终四件套落在哪**。所以中间产物写到了 `/tmp/xxx/tiktok/...`，
+`<folder>/work` 从未被创建；而 processed-log 已经记了这个输入，后续 run 全部跳过。
+
+**解决**：显式给 `--work-dir`：
+```bash
+run_pipeline.py --input /tmp/xxx/clean.mp4 \
+  --work-dir /Users/me/Downloads/tiktok/<folder>/work \
+  --output   /Users/me/Downloads/tiktok/<folder> --resume --force
+```
+已经踩坑的话别重跑分析：把 `/tmp/xxx/tiktok/<name>/work` 整个 `cp -R` 到目标
+`work/`，把 `pipeline-config.json` 里的 `work_dir` 改对，再 `apply.py` + 上面的命令
+即可复用已有 ASR/OCR 结果。
+
 ### FFmpeg 未安装
 **症状**：`video_probe.py` 或 `extract_frames.py` 报 `ffprobe/ffmpeg not found`
-
 **解决**：
 ```bash
 # macOS
@@ -236,3 +268,58 @@ python scripts/run_pipeline.py --input input/source.mp4 --work-dir work --output
 2. 检查各中间 JSON 的 degraded 字段
 3. 检查 tiktok-post.md 第七段
 4. 如实告知用户，不掩盖问题
+
+## 判定类事故（2026-11-13，音频策略 + 水印）
+
+这两类都不是"脚本报错"，而是**判据写错却一路 PASS**，只能靠用户回头指出。
+共同特征：**判定依据与决策后果不匹配**。
+
+### 用户说"BGM 是垃圾 / 太单调"，但原片本来就没有音乐
+
+**症状**：成品是整段循环的授权 BGM，听不出任何现场声/解说；用户连着几条反馈同一种感受。
+
+**根因链（三层，缺一层就不会出事故）**：
+1. `analyze_narration.py` 只判「有没有**中文**解说」；
+2. job 在它答「否」后直接选 `remove_original_bgm_only`（丢整轨）；
+3. 为了省时间，批处理把 ASR 标成 `skipped: batch uses remove_original_bgm_only`
+   —— 实测 25 条里 **20 条**如此，于是**永远没有证据能反对这个决定**。
+
+**排查**：
+```bash
+python scripts/analyze_source_audio.py --video input/source.mp4 --work-dir work
+# 看 has_speech / speech_lang / has_music / recommended_strategy
+```
+它会自己跑 whisper 采样补证（3×45s），`asr.json` 被 skip 也不影响。
+
+**修法**：按 `recommended_strategy` 走（SKILL.md §3.0 决策表）。
+外语解说 → `keep_original`；原片自带 BGM → `keep_original`。
+`remove_original_bgm_only` 只保留给「用户明确要求换原声」。
+
+**别再犯的**：不要用「谱峰重合率 / 谱平坦度 / 高频能量占比」去区分音乐与人声 ——
+实测 611s 英语解说的谱峰重合率 0.625，与电子乐完全相同。唯一可靠的是 ASR 语言检测。
+
+### 有外语解说却判定「无解说」
+
+**症状**：`asr.json` 里 `segments` 为空或全是乱码汉字；`has_chinese_narration=false`。
+
+**根因**：ASR 曾把 `language="zh"` 钉死，英语音轨被强行按中文解码。
+
+**排查**：看 `asr.json.language_detected`。若为 `unknown` 而片子明显有解说，
+说明是老版产物（新版会写真实语言 + `has_foreign_narration`）。
+
+**修法**：重跑 `audio_processor.py asr-only`（已改为自动检测语言）。
+
+### 视频里还有水印，但 QA 判 PASS
+
+**症状**：画面中部/角落有手写体英文 ID（`TONY-Zhong30`、`TMAC-Zhang30`），
+`decisions.json` 里写着"拉丁字母不触发中文门禁，保留"。
+
+**根因**：把「中文残留门禁」当成了「水印判据」。用户看的是"这像不像我的片子"，
+不是"是不是汉字"。
+
+**判据**：上传者签名/ID → 必须去；电视台标（TNT/ESPN）、自家品牌条 → 保留。
+
+**做法**：`scripts/delogo_static.py`（2026-11-13 升级为中值 top-hat + 笔画级掩膜），
+参数与验收标准见 SKILL.md「英文/手写水印」小节。**别用整框矩形 inpaint**，
+那会在画面正中糊出一条横带。
+

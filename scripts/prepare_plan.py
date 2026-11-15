@@ -342,6 +342,28 @@ def main():
     # 1) localization-plan
     has_zh = asr.get("has_chinese_narration")
     strategy = "mute_original_tts_bgm" if has_zh else "keep_original"
+
+    # 2026-11-13：把原声结构诊断的结论带进 plan，避免 Agent 只看「无中文」就手改成
+    # remove_original_bgm_only（那正是三条片子返工的原因，见 SKILL.md §3.0）
+    sap_path = os.path.join(work, "source-audio-profile.json")
+    sap = {}
+    if os.path.exists(sap_path):
+        try:
+            with open(sap_path, encoding="utf-8") as f:
+                sap = json.load(f) or {}
+        except (json.JSONDecodeError, IOError):
+            sap = {}
+    if not sap:
+        print("[prepare_plan] WARNING: 缺 work/source-audio-profile.json —— "
+              "音频策略只能靠 has_chinese_narration 推断。先跑 "
+              "`analyze_source_audio.py`（SKILL.md §3.0）")
+    elif sap.get("recommended_strategy") and sap["recommended_strategy"] != strategy \
+            and not has_zh:
+        print(f"[prepare_plan] WARNING: 原声诊断建议 {sap['recommended_strategy']}，"
+              f"但按 has_chinese_narration 推出 {strategy}。以诊断为优先，"
+              f"必要时手改 audio_strategy（§3.0）")
+        if sap["recommended_strategy"] != strategy:
+            strategy = sap["recommended_strategy"]
     write(
         "localization-plan.json",
         {
@@ -349,14 +371,17 @@ def main():
             "review_mode": False,
             "audio_strategy": strategy,
             "audio_strategy_reason": (
-                f"auto-derived: asr.has_chinese_narration={has_zh}. "
-                + ("Chinese narration -> must mute original track (rule 12.3). " if has_zh else "No Chinese narration -> kept original audio. ")
+                f"auto-derived: asr.has_chinese_narration={has_zh}"
+                + (f"; source-audio-profile: has_speech={sap.get('has_speech')}, "
+                   f"lang={sap.get('speech_lang')}, has_music={sap.get('has_music')}, "
+                   f"recommended={sap.get('recommended_strategy')}" if sap else
+                   "; source-audio-profile MISSING (run analyze_source_audio.py)")
+                + (". Chinese narration -> must mute original track (rule 12.3). " if has_zh
+                   else ". No Chinese narration -> kept original audio. ")
                 + ("User requested NO BGM processing." if args.no_bgm else
-                   "TODO(agent): pick BGM from configs/bgm-library.yaml, and if the "
-                   "original BGM should not dominate, switch strategy to "
-                   "remove_original_bgm_only (drops ALL original audio) or "
-                   "duck_original_add_bgm (keeps crowd/scene sound at a low level) "
-                   "-- see SKILL.md section 3.")
+                   "TODO(agent): 选 BGM 前先读 source-audio-profile.json 的 "
+                   "recommended_strategy；**不要**因为「没检出中文」就改选 "
+                   "remove_original_bgm_only（见 SKILL.md §3.0）。")
             ),
             "bgm": {
                 "asset_source": "none" if args.no_bgm else "music-library",

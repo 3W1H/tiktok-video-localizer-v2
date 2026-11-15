@@ -228,7 +228,9 @@ def analyze(video_path, asr=None, asr_path=None):
     if not has_narration or not segs:
         return make_result(
             status="ok", confidence=0.9,
-            warnings=["未检出中文解说：无需英文解说，直接走 remove_original_bgm_only + BGM"],
+            warnings=["未检出中文解说。⚠️ 这不等于「可以丢原声」—— 先跑 "
+                      "`analyze_source_audio.py` 判 has_speech（任何语言）/ has_music，"
+                      "再定策略（SKILL.md §3.0）"],
             has_narration=False,
             full_duration_sec=round(full_dur, 3),
             tts_needed=False,
@@ -242,9 +244,10 @@ def analyze(video_path, asr=None, asr_path=None):
         return make_result(
             status="ok_with_warnings", confidence=0.75,
             warnings=[
-                "ASR 疑似幻觉（" + "；".join(hallu_reasons) + "）→ 判定为**无中文解说**。"
-                "不要据此生成英文解说，否则会凭空造出与原片无关的旁白；"
-                "音频按 remove_original_bgm_only 处理。若确有解说，请人工听一遍确认。"
+                "ASR 疑似幻觉（" + "；".join(hallu_reasons) + "）→ 判定为**转写不可用**，"
+                "但**不等于原声里没人说话**。不要据此生成英文解说（会凭空造旁白）；"
+                "策略仍要看 `analyze_source_audio.py` 的 has_speech / has_music，"
+                "尤其注意外语解说与自带 BGM 的片子必须 keep_original（SKILL.md §3.0）。"
             ],
             has_narration=False,
             asr_hallucination=True,

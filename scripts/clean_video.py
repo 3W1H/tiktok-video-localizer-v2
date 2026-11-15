@@ -162,10 +162,44 @@ def check_logo_asset(plan: Dict) -> Tuple[bool, List[str]]:
     return len(errors) == 0, errors
 
 
+def gradient_fill_bbox(frame, bbox: Dict, pad: int = 2, blur: int = 9):
+    """用矩形上/下边缘各一行的真实背景做逐列线性插值填充（in-place）。
+
+    为什么需要它：源片水印往往压在**强模糊的背景带**上（上下黑边/虚化填充区）。
+    TELEA inpaint 从边界向内扩散，会把水印白描边附近的亮像素带进填充区，结果留下
+    一块比周围更亮的矩形补丁 —— 肉眼可见的「糊块」。线性插值不读取框内任何像素，
+    且上下两条锚线取自真实背景，边界颜色严格连续。
+
+    适用：水印/字幕位于平滑渐变背景（虚化带、纯色底、渐变天空）。
+    不适用：框内是锐利主体（人物/球衣细节/文字密集画面），插值会抹平纹理。
+    """
+    import numpy as np
+    x, y, w, h = bbox["x"] - pad, bbox["y"] - pad, bbox["w"] + 2 * pad, bbox["h"] + 2 * pad
+    H, W = frame.shape[:2]
+    x0, y0 = max(0, x), max(0, y)
+    x1, y1 = min(W, x + w), min(H, y + h)
+    if x1 - x0 < 2 or y1 - y0 < 2:
+        return frame
+    top = frame[max(0, y0 - 1), x0:x1].astype(np.float32)
+    bot = frame[min(H - 1, y1), x0:x1].astype(np.float32)
+    rows = np.linspace(0.0, 1.0, y1 - y0, dtype=np.float32)[:, None, None]
+    fill = top[None, :, :] * (1.0 - rows) + bot[None, :, :] * rows
+    frame[y0:y1, x0:x1] = np.clip(fill, 0, 255).astype(np.uint8)
+    if blur and blur > 1:
+        import cv2
+        k = blur | 1
+        frame[y0:y1, x0:x1] = cv2.GaussianBlur(frame[y0:y1, x0:x1], (k, k), 0)
+    return frame
+
+
 def inpaint_with_opencv(video_path: str, masks: List[Dict], out_path: str,
                           frame_w: int, frame_h: int, inpaint_radius: int = 3,
                           crf: int = 18, preset: str = "medium") -> Dict:
-    """用 OpenCV inpaint 清理视频（逐帧处理）"""
+    """用 OpenCV inpaint 清理视频（逐帧处理）
+
+    `removal_method` 含 "gradient" 的区域走梯度填充（平滑背景下的水印/角标），
+    其余走 TELEA inpaint。
+    """
     try:
         import cv2
         import numpy as np
@@ -196,10 +230,22 @@ def inpaint_with_opencv(video_path: str, masks: List[Dict], out_path: str,
         timestamp = frame_idx / fps if fps > 0 else 0
         frame_mask = np.zeros((frame_h, frame_w), dtype=np.uint8)
         frame_has_mask = False
+        grad_bboxes: List[Dict] = []
 
         for m in masks:
             if m["start_time"] <= timestamp <= m["end_time"]:
                 bbox = m["bbox"]
+                if "gradient" in (m.get("removal_method") or []):
+                    grad_bboxes.append(bbox)
+                    if m.get("confidence", 0.5) < 0.7:
+                        low_confidence_regions.append({
+                            "frame": frame_idx,
+                            "timestamp": round(timestamp, 3),
+                            "item_id": m.get("item_id"),
+                            "bbox": bbox,
+                            "confidence": m.get("confidence"),
+                        })
+                    continue
                 x1 = max(0, bbox["x"] - 2)
                 y1 = max(0, bbox["y"] - 2)
                 x2 = min(frame_w, bbox["x"] + bbox["w"] + 2)
@@ -216,10 +262,15 @@ def inpaint_with_opencv(video_path: str, masks: List[Dict], out_path: str,
                         "confidence": m.get("confidence"),
                     })
 
+        for bbox in grad_bboxes:
+            frame = gradient_fill_bbox(frame, bbox)
+
         if frame_has_mask:
             kernel = np.ones((3, 3), np.uint8)
             frame_mask = cv2.dilate(frame_mask, kernel, iterations=1)
             frame = cv2.inpaint(frame, frame_mask, inpaint_radius, cv2.INPAINT_TELEA)
+            processed += 1
+        elif grad_bboxes:
             processed += 1
 
         writer.write(frame)

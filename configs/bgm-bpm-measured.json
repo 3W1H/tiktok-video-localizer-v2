@@ -336,6 +336,240 @@
       "duration_sec": 226.456,
       "category": "high_energy",
       "is_variant": false
+    },
+    {
+      "file": "music/sports/Aggressor.mp3",
+      "bpm_measured": 152.0,
+      "bpm_declared": null,
+      "confidence": 0.484,
+      "duration_sec": 238.864,
+      "category": "high_energy",
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Blown Away.mp3",
+      "bpm_measured": 172.3,
+      "bpm_declared": null,
+      "confidence": 0.601,
+      "duration_sec": 225.936,
+      "category": "high_energy",
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Cortosis.mp3",
+      "bpm_measured": 86.1,
+      "bpm_declared": null,
+      "confidence": 0.414,
+      "duration_sec": 153.156,
+      "category": "high_energy",
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Cyborg Ninja.mp3",
+      "bpm_measured": 161.5,
+      "bpm_declared": null,
+      "confidence": 0.863,
+      "duration_sec": 180.062,
+      "category": "high_energy",
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Death and Axes.mp3",
+      "bpm_measured": 92.3,
+      "bpm_declared": null,
+      "confidence": 0.504,
+      "duration_sec": 168.072,
+      "category": "high_energy",
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Firebrand.mp3",
+      "bpm_measured": 83.4,
+      "bpm_declared": null,
+      "confidence": 0.714,
+      "duration_sec": 358.609,
+      "category": "high_energy",
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Hot Pursuit.mp3",
+      "bpm_measured": 123.0,
+      "bpm_declared": null,
+      "confidence": 0.52,
+      "duration_sec": 169.247,
+      "category": "high_energy",
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Long Time Coming.mp3",
+      "bpm_measured": 120.2,
+      "bpm_declared": null,
+      "confidence": 0.701,
+      "duration_sec": 274.364,
+      "category": "high_energy",
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Neolith.mp3",
+      "bpm_measured": 71.8,
+      "bpm_declared": null,
+      "confidence": 0.727,
+      "duration_sec": 167.232,
+      "category": "high_energy",
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Stoneworld Battle.mp3",
+      "bpm_measured": 112.3,
+      "bpm_declared": null,
+      "confidence": 0.435,
+      "duration_sec": 233.509,
+      "category": "high_energy",
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Unity.mp3",
+      "bpm_measured": 139.7,
+      "bpm_declared": null,
+      "confidence": 0.442,
+      "duration_sec": 264.072,
+      "category": "high_energy",
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Welcome to the Show.mp3",
+      "bpm_measured": 123.0,
+      "bpm_declared": null,
+      "confidence": 0.746,
+      "duration_sec": 282.72,
+      "category": "high_energy",
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Corruption.mp3",
+      "bpm_measured": 80.7,
+      "bpm_declared": null,
+      "confidence": 0.432,
+      "duration_sec": 423.053,
+      "category": "high_energy",
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Egmont Overture.mp3",
+      "bpm_measured": 152.0,
+      "bpm_declared": null,
+      "confidence": 0.645,
+      "duration_sec": 546.192,
+      "category": "high_energy",
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Deep and Dirty.mp3",
+      "bpm_measured": 139.7,
+      "bpm_declared": null,
+      "confidence": 0.544,
+      "duration_sec": 442.358,
+      "category": "high_energy",
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Unlight.mp3",
+      "bpm_measured": 152.0,
+      "bpm_declared": null,
+      "confidence": 0.529,
+      "duration_sec": 189.309,
+      "category": "high_energy",
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Trips It.mp3",
+      "bpm_measured": 143.6,
+      "bpm_declared": null,
+      "confidence": 0.323,
+      "duration_sec": 260.206,
+      "category": "high_energy",
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Outfoxing the Fox.mp3",
+      "bpm_measured": 161.5,
+      "bpm_declared": null,
+      "confidence": 0.673,
+      "duration_sec": 175.464,
+      "category": "high_energy",
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Furious Freak.mp3",
+      "bpm_measured": 129.2,
+      "bpm_declared": null,
+      "confidence": 0.808,
+      "duration_sec": 187.141,
+      "category": "high_energy",
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Hall of the Mountain King.mp3",
+      "bpm_measured": 83.4,
+      "bpm_declared": null,
+      "confidence": 0.721,
+      "duration_sec": 152.976,
+      "category": "high_energy",
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Clenched Teeth.mp3",
+      "bpm_measured": 161.5,
+      "bpm_declared": null,
+      "confidence": 0.66,
+      "duration_sec": 91.152,
+      "category": "high_energy",
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Grim Idol.mp3",
+      "bpm_measured": 139.7,
+      "bpm_declared": null,
+      "confidence": 0.477,
+      "duration_sec": 224.862,
+      "category": "high_energy",
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Obliteration.mp3",
+      "bpm_measured": 139.7,
+      "bpm_declared": null,
+      "confidence": 0.516,
+      "duration_sec": 149.42,
+      "category": "high_energy",
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Club Diver.mp3",
+      "bpm_measured": 139.7,
+      "bpm_declared": null,
+      "confidence": 0.474,
+      "duration_sec": 145.685,
+      "category": "high_energy",
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Scattershot.mp3",
+      "bpm_measured": 99.4,
+      "bpm_declared": null,
+      "confidence": 0.401,
+      "duration_sec": 122.436,
+      "category": "high_energy",
+      "is_variant": false
+    },
+    {
+      "file": "music/sports/Mistake the Getaway.mp3",
+      "bpm_measured": 143.6,
+      "bpm_declared": null,
+      "confidence": 0.443,
+      "duration_sec": 122.616,
+      "category": "high_energy",
+      "is_variant": false
     }
   ]
 }

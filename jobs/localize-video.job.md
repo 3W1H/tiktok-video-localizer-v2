@@ -70,7 +70,9 @@ python scripts/audio_processor.py tts --work-dir work
   F0 / 语速 / 能量算出）。要手工覆盖就显式传 `--voice/--rate/--pitch`。
   实测：同句子 `rate=+15%` 生成 2.160s，`rate=+0%` 生成 2.496s —— 参数确实生效。
 - 若 `narration-style.json` 判定 `tts_needed: false`（含 ASR 幻觉判定），
-  **不要**再走本步，直接按 `remove_original_bgm_only` 处理（避免凭空造旁白）
+  **不等于「可以丢原声」** —— 必须回看 `work/source-audio-profile.json` 的
+  `recommended_strategy`（Job1 Step 14）。外语解说片、原片自带 BGM 的片都落在这里，
+  它们应走 `keep_original`；`remove_original_bgm_only` 只在用户明确要求换原声时才成立。
 - Provider 链：Agent Native → Cloud TTS → local_tts_cli → skip_with_warning
 - TTS 完全不可用时：静音原轨 + 无配音 + 英文字幕 + BGM → WARNING
 - 产出：`work/tts/tts_XXXX.wav` + `work/tts-result.json`

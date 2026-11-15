@@ -176,6 +176,11 @@ def job_analyze(video: str, work_dir: str, resume: bool = False) -> Dict:
         ("ocr_video.py", ["--work-dir", work_dir, "--pass", "dense"], "OCR pass 2 (dense)"),
         ("track_text.py", ["--work-dir", work_dir], "Track text across frames"),
         ("audio_processor.py", ["asr-only", "--video", video, "--work-dir", work_dir], "ASR speech recognition"),
+        # 2026-11-13 新增：ASR 只回答「有没有中文」，回答不了「有没有外语解说 / 原片有没有
+        # 自带 BGM」。而这两件事直接决定能不能丢原声（见 SKILL.md §3.0）。
+        # 必须跑在策略决策之前；ASR 若被 skip 它会自己补 whisper 采样。
+        ("analyze_source_audio.py", ["--video", video, "--work-dir", work_dir],
+         "Diagnose source audio (speech language / built-in BGM / suggested strategy)"),
     ]
 
     results = {}

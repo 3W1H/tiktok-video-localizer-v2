@@ -71,6 +71,43 @@ from common import (
 # 无 narration-style.json 时的兜底音色（"Passion"，体育解说常用）
 DEFAULT_TTS_VOICE = "en-US-GuyNeural"
 
+# 混音中间产物统一用 32-bit float WAV。
+# ⚠️ 为什么不是默认的 pcm_s16le（2026-11-13 实测）：`amix ... normalize=0` 是把两路
+#    直接相加，两路各自接近 0 dBFS 时和会**超过 1.0**。写 s16 时 ffmpeg 只在采样点上
+#    做硬裁切（不报错），于是「混完再 loudnorm」拿到的是一段已经削平的波形 —— 后续
+#    再怎么归一化也救不回来（实测 amix 后 TP 冲到 +0.1 dBFS，成片发糊）。
+#    float32 的数值范围远大于 ±1.0，削波只发生在最终 AAC 编码那一步，而我们会在那
+#    之前用 loudnorm 把 TP 压到 -1.5。代价是中间文件大 1 倍，只存在 work/ 里。
+MIX_WAV_CODEC = "pcm_f32le"
+
+_AAC_ENCODER_CACHE: Optional[str] = None
+
+
+def pick_aac_encoder() -> str:
+    """挑一个不削波的 AAC 编码器。
+
+    ⚠️ 本机 ffmpeg 5.0.1 的**内建 `aac` 有增益偏差**：实测把一段峰值 −3.9 dBFS 的
+    WAV 编成 m4a 再解回来，峰值变成 **0.0 dBFS** —— 等于内部抬了 ~4 dB 并削顶。
+    同一段用 `aac_at`（AudioToolbox）进出，峰值保持 −3.9，且 bitrate/时长一致。
+    （2026-11-13 在「60大创意扣篮」换 BGM 时第一次发现，之后全批改用 aac_at。）
+
+    `aac_at` 是 macOS 专有（AudioToolbox），Linux 上没有，因此**必须探测后回退**，
+    不能硬编码。
+    """
+    global _AAC_ENCODER_CACHE
+    if _AAC_ENCODER_CACHE:
+        return _AAC_ENCODER_CACHE
+    enc = "aac"
+    try:
+        out = run(["ffmpeg", "-hide_banner", "-encoders"], check=False)
+        listing = (getattr(out, "stdout", "") or "") + (getattr(out, "stderr", "") or "")
+        if "aac_at" in listing:
+            enc = "aac_at"
+    except Exception:  # noqa: BLE001 - 探测失败就用内建，不影响交付
+        enc = "aac"
+    _AAC_ENCODER_CACHE = enc
+    return enc
+
 
 def detect_chinese(text: str) -> bool:
     return any('\u4e00' <= c <= '\u9fff' for c in text)
@@ -85,6 +122,8 @@ def run_asr(video_path: str, work_dir: str, engine: str = "auto") -> Dict:
     engine_used = None
     degraded = False
     warnings = []
+    detected_lang = None
+    lang_prob = None
 
     # 提取音频
     audio_path = work_path(work_dir, "source_audio.wav")
@@ -124,7 +163,15 @@ def run_asr(video_path: str, work_dir: str, engine: str = "auto") -> Dict:
         try:
             from faster_whisper import WhisperModel
             model = WhisperModel("base", device="cpu", compute_type="int8")
-            segments_iter, info = model.transcribe(audio_path, language="zh", beam_size=5)
+            # ⚠️ **不要传 language="zh"**（2026-11-13 修）。旧实现把语言钉死成中文，
+            #    于是英语解说会被强行按中文解码：要么吐出乱码汉字（chinese_ratio 冲到
+            #    0.3 以上 → 误判「有中文旁白」→ 生成英文 TTS 覆盖掉原解说），要么直接
+            #    吐空（→ 误判「无旁白」→ 整轨丢弃）。两种结局都是灾难，而且**看不出来**，
+            #    因为日志只显示 has_chinese_narration=False。
+            #    正确做法：先自动检测语言，把真实语言写进 language_detected。
+            segments_iter, info = model.transcribe(audio_path, beam_size=5)
+            detected_lang = getattr(info, "language", None)
+            lang_prob = round(float(getattr(info, "language_probability", 0.0) or 0.0), 3)
             for seg in segments_iter:
                 text = seg.text.strip()
                 if text:
@@ -143,7 +190,10 @@ def run_asr(video_path: str, work_dir: str, engine: str = "auto") -> Dict:
         try:
             import whisper
             model = whisper.load_model("base")
-            result_whisper = model.transcribe(audio_path, language="zh", verbose=False)
+            # 同上：不指定 language，让 whisper 自己判（result["language"]）
+            result_whisper = model.transcribe(audio_path, verbose=False)
+            detected_lang = result_whisper.get("language")
+            lang_prob = 0.0
             for seg in result_whisper.get("segments", []):
                 text = seg.get("text", "").strip()
                 if text:
@@ -163,15 +213,29 @@ def run_asr(video_path: str, work_dir: str, engine: str = "auto") -> Dict:
     chinese_chars = sum(1 for c in full_text if '\u4e00' <= c <= '\u9fff')
     total_chars = len(full_text.replace(" ", ""))
     chinese_ratio = chinese_chars / max(total_chars, 1)
-    has_chinese_narration = chinese_ratio > 0.3 and len(segments) > 0
+    # detected_lang 为空时（引擎失败）退化成按汉字比例判
+    if not detected_lang:
+        detected_lang = "zh" if chinese_ratio > 0.3 and segments else None
+    is_zh = (detected_lang or "").lower().startswith(("zh", "cmn", "yue"))
+    has_chinese_narration = bool(is_zh and chinese_ratio > 0.3 and len(segments) > 0)
+
+    # 外语解说：这是「绝对不能丢原声」的强证据，必须显式告警，
+    # 否则下游只会看到 has_chinese_narration=False 就心安理得地删整轨。
+    if segments and not is_zh:
+        warnings.append(
+            f"检出 {detected_lang} 解说/对白（{len(segments)} 段）："
+            f"禁止走 remove_original_bgm_only（会删掉这条内容音轨），"
+            f"见 SKILL.md §3「原声结构诊断」")
 
     result = make_result(
         status="ok" if not degraded else "degraded",
         confidence=0.8 if engine_used in ("whisper_local", "faster_whisper_local") else 0.5,
         provider_used=engine_used or "none",
         degraded=degraded,
-        language_detected="zh" if has_chinese_narration else "unknown",
+        language_detected=detected_lang or "unknown",
+        language_probability=lang_prob,
         has_chinese_narration=has_chinese_narration,
+        has_foreign_narration=bool(segments and not is_zh),
         chinese_ratio=round(chinese_ratio, 4),
         segments=segments,
         total_segments=len(segments),
@@ -437,11 +501,13 @@ def build_bgm_track(work_dir: str, bgm_asset: str, duration: float,
             f"[rot]{','.join(tail_filters)}[out]"
         )
         run(["ffmpeg", "-y", *in_args, "-i", bgm_asset, "-filter_complex", graph,
-             "-map", "[out]", "-t", str(duration), bgm_track])
+             "-map", "[out]", "-t", str(duration),
+             "-c:a", MIX_WAV_CODEC, bgm_track])
     else:
         run(["ffmpeg", "-y", *in_args, "-i", bgm_asset,
              "-af", ",".join(filters + tail_filters),
-             "-t", str(duration), bgm_track])
+             "-t", str(duration),
+             "-c:a", MIX_WAV_CODEC, bgm_track])
     return bgm_track
 
 
@@ -664,11 +730,18 @@ def run_mix(video_path: str, work_dir: str, output_dir: str,
                                         0.0, 0.0, bgm_plan,
                                         bgm_config.get("tone"))
             # 混合 TTS + BGM
+            # ⚠️ `normalize=0` 不能漏（2026-11-13 补）。amix 默认 normalize=1，会按
+            #    输入路数把每路除以 2 —— BGM 与 TTS 同时 -6 dB，两者比例虽没变，但
+            #    `audio-plan.json` 里精心算的 `bgm.volume_db` 被这个隐式衰减抵消掉，
+            #    后面 loudnorm 再整体抬回来，于是「BGM 压到 -18 让位人声」等于没做。
+            #    与 §14.8 记录的 64 路 TTS 是同一个坑的轻量版。
             run([
                 "ffmpeg", "-y",
                 "-i", tts_track, "-i", bgm_track,
-                "-filter_complex", "[0:a][1:a]amix=inputs=2:duration=longest[loudness]",
+                "-filter_complex",
+                "[0:a][1:a]amix=inputs=2:duration=longest:normalize=0[loudness]",
                 "-map", "[loudness]",
+                "-c:a", MIX_WAV_CODEC,
                 mixed_audio,
             ])
         else:
@@ -715,6 +788,7 @@ def run_mix(video_path: str, work_dir: str, output_dir: str,
             "[1:a]aformat=sample_rates=44100:channel_layouts=stereo[tts];"
             "[base][tts]amix=inputs=2:duration=longest:normalize=0[loudness]",
             "-map", "[loudness]",
+            "-c:a", MIX_WAV_CODEC,
             mixed_audio,
         ])
         _normalize_loudness(mixed_audio)
@@ -748,21 +822,19 @@ def run_mix(video_path: str, work_dir: str, output_dir: str,
 
         bgm_used = bgm_asset if bgm_asset and os.path.exists(bgm_asset) else None
         if bgm_used:
-            bgm_track = work_path(work_dir, "bgm_track.wav")
-            fade_filter = (
-                f"afade=t=in:st=0:d={fade_in},"
-                f"afade=t=out:st={max(0, duration - fade_out)}:d={fade_out}"
-            )
-            shelf = bgm_tone_filter(bgm_config.get("tone"))
-            run([
-                "ffmpeg", "-y", "-i", bgm_used,
-                "-filter_complex",
-                f"aloop=loop=-1:size=2e9,atrim=0:{duration},volume={bgm_volume}dB"
-                + (f",{shelf}" if shelf else "")
-                + f",{fade_filter}",
-                "-t", str(duration),
-                bgm_track,
-            ])
+            # ⚠️ 这里原来是手搓的 `aloop=loop=-1,atrim=0:dur`（对原始 mp3 无限循环）。
+            #    2026-11-13 改走 build_bgm_track：
+            #    ① 旧写法**完全无视 bgm-plan**（没有 drop 对齐、没有 atempo、没有
+            #       跳过曲首垫片），同一首曲子在这里和在 remove_original_bgm_only 里
+            #       落点完全不同；
+            #    ② `aloop` 循环的是**整曲**，曲尾的淡出/数字静音会被原样搬到片中 ——
+            #       用户听到的「中间突然安静两秒再接着响」就是它（§3 已记录过同款坑
+            #       发生在 remove_original_bgm_only 分支，当时只修了那一支）。
+            #    build_bgm_track 保证：片长 ≤ 曲子的有用段时**零拼接整曲平铺**，
+            #    真需要循环时也只回卷到曲首、循环体是整曲。
+            bgm_track = build_bgm_track(work_dir, bgm_used, duration, bgm_volume,
+                                        fade_in, fade_out, bgm_plan,
+                                        bgm_config.get("tone"))
             # normalize=0：两路电平均已各自 gain 过，不要让 amix 再按输入数除一次
             run([
                 "ffmpeg", "-y",
@@ -770,6 +842,7 @@ def run_mix(video_path: str, work_dir: str, output_dir: str,
                 "-filter_complex",
                 "[0:a][1:a]amix=inputs=2:duration=longest:normalize=0[loudness]",
                 "-map", "[loudness]",
+                "-c:a", MIX_WAV_CODEC,
                 mixed_audio,
             ])
         else:
@@ -816,7 +889,7 @@ def run_mix(video_path: str, work_dir: str, output_dir: str,
         "-i", video_for_mux,
         "-i", mixed_audio,
         "-map", "0:v:0", "-map", "1:a:0",
-        "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+        "-c:v", "copy", "-c:a", pick_aac_encoder(), "-b:a", "192k",
         "-shortest",
         final_video,
     ])

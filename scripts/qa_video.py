@@ -48,6 +48,13 @@ def check_video(output_dir: str, work_dir: str) -> Dict:
     if orig.get("duration_sec"):
         expected_duration = orig["duration_sec"]
 
+    # 成片后处理（2026-11-03 新增）：裁片头卡 / 重混音等人工修订会再次改变时长，
+    # work/post-edit.json {"duration_sec": <新时长>, "note": ...} 为最高优先级基准。
+    # 例：纯享裁 0-5.2s 片头卡+水印段后 316.8s（写这个文件就不会误报 Duration FAIL）。
+    post = load_json(work_path(work_dir, "post-edit.json"), {})
+    if post.get("duration_sec"):
+        expected_duration = post["duration_sec"]
+
     if not os.path.exists(final_path):
         return {"status": "fail", "detail": "final.mp4 not found", "duration_match": False}
 
@@ -234,6 +241,13 @@ def check_subtitle(output_dir: str, work_dir: str) -> Dict:
             continue  # draws no subtitle -> cannot conflict with one
         entries.append(e)
 
+    # NOTE (2026-10-30): timeline.entries 的顺序 = localization-plan.items 的顺序，
+    # 但 items 是**按画面区域分组**写的（13 号：顶部标题 → 底部 38 句字幕 →
+    # 画面中部 meme 字幕 M1），时间上并不单调。直接拿相邻两项比较就会报假冲突
+    # （S38 281s "vs" M1 56.5s = 1 处），而 subtitles-en.srt 实测零重叠。
+    # 冲突必须按**时间排序后**相邻比较才有意义。
+    entries.sort(key=lambda e: (e.get("final_start") or e.get("start_time") or 0))
+
     timeline_conflicts = 0
     for i in range(len(entries) - 1):
         if entries[i].get("final_end", 0) > entries[i + 1].get("final_start", 0):
@@ -251,9 +265,21 @@ def check_subtitle(output_dir: str, work_dir: str) -> Dict:
     }
 
 
+def _cjk_count(text: str) -> int:
+    return sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
+
+
 def has_chinese_text(text: str, min_chars: int = 2) -> bool:
-    """检测文本是否含中文（CJK）。要求至少 2 个连续区间字符，避免 OCR 把
-    球场纹理/英文字母误识别为单个中文字（如 '人'、'一'、'有'）造成误报。"""
+    """检测文本是否含中文（CJK）。视频侧默认仍要求 ≥2 个汉字，避免 OCR 把
+    球场纹理/英文字母误识别为单个中文字（如 '人'、'一'、'有'）造成误报。
+
+    ⚠️ 2026-11-03 起，**封面侧必须传 min_chars=1**：封面文字是我们自己用英文
+    字体画的，出现任何单个汉字都只可能来自源画面（logo/水印漏擦）。
+      已知边界：图形化汉字（logo/徽标里的单字，如途虎那枚红底白「途」）PP-OCR
+    的 det 阶段根本不产出框 —— 实测原图/2x/3x/裁剪 4x/box_thresh 0.1 全部 0 命中。
+    所以「min_chars 降到 1」只解决"大字单字"，图形化那部分由 double_check.py 的
+    cover-review 目视门禁覆盖，不属本函数的职责范围。
+    """
     count = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
     return count >= min_chars
 
@@ -273,7 +299,8 @@ def ocr_cover_chinese(cover_path: str) -> List[str]:
         lines: List[str] = []
         for det in ocr_with_rapidocr(cover_path):
             t = (det.get("text") or "").strip()
-            if t and has_chinese_text(t):
+            # min_chars=1：封面出现任何单个汉字都算残留（见 has_chinese_text docstring）
+            if t and has_chinese_text(t, 1):
                 lines.append(t)
         return lines
     except Exception:
@@ -383,6 +410,23 @@ def check_chinese_residue(output_dir: str, work_dir: str,
 
     frames = sorted(glob.glob(os.path.join(frame_dir, "f*.jpg")))
     residues: List[Dict[str, Any]] = []
+    # 单字中文另立一档（2026-11-03）：≥2 字才判 FAIL 的口径不变，但「只出现 1 个
+    # 汉字」的情况不能直接扔掉 —— 徽标/水印里的单字（如「途」）会这样漏过去。
+    singles: List[Dict[str, Any]] = []
+
+    def _classify(dets: List[Dict[str, Any]], ts: float) -> None:
+        for det in dets:
+            text = (det.get("text") or "").strip()
+            conf = det.get("confidence") or 0
+            if not text or conf < min_confidence:
+                continue
+            rec = {"timestamp_sec": ts, "text": text,
+                   "confidence": det.get("confidence"), "bbox": det.get("bbox")}
+            if has_chinese_text(text):
+                residues.append(rec)
+            elif _cjk_count(text) >= 1:
+                singles.append(rec)
+
     for i, fp in enumerate(frames):
         ts = round(i / fps, 3)
         try:
@@ -390,16 +434,7 @@ def check_chinese_residue(output_dir: str, work_dir: str,
         except Exception as e:
             log.warning(f"  残留检测 OCR 失败 @ {ts}s: {str(e)[:120]}")
             continue
-        for det in dets:
-            text = (det.get("text") or "").strip()
-            conf = det.get("confidence") or 0
-            if text and has_chinese_text(text) and conf >= min_confidence:
-                residues.append({
-                    "timestamp_sec": ts,
-                    "text": text,
-                    "confidence": det.get("confidence"),
-                    "bbox": det.get("bbox"),
-                })
+        _classify(dets, ts)
 
     # 边缘加密（2026-10-29，98全明星实测）：上传者自制收尾卡片常只持续
     # 0.3-1s（例：187.5-187.9s 的中文致谢卡「致敬科比」）。body 的周期取模
@@ -433,16 +468,7 @@ def check_chinese_residue(output_dir: str, work_dir: str,
                 except Exception as e:
                     log.warning(f"  残留检测(边缘) OCR 失败 @ {ts}s: {str(e)[:120]}")
                     continue
-                for det in dets:
-                    text = (det.get("text") or "").strip()
-                    conf = det.get("confidence") or 0
-                    if text and has_chinese_text(text) and conf >= min_confidence:
-                        residues.append({
-                            "timestamp_sec": ts,
-                            "text": text,
-                            "confidence": det.get("confidence"),
-                            "bbox": det.get("bbox"),
-                        })
+                _classify(dets, ts)
 
     # 按文本归组，给出人类可读的区间清单
     grouped_map: Dict[str, List[Dict[str, Any]]] = {}
@@ -487,6 +513,26 @@ def check_chinese_residue(output_dir: str, work_dir: str,
         g["misread_reason"] = "repeated_identical_glyph"
     misreads = misreads + repeat_misreads
 
+    # 规 3（2026-11-15）：**稀疏、低置信、短文本** = 图形化频道角标误读。
+    #   idx39 左上角「Airball」空心书法字品牌角标被读成「周亚释」，
+    #   conf 0.52~0.54、仅 3 帧且分散在 63/80/81s（跨度 18s）；抽帧放大目视
+    #   确认源片与成片完全一致，是固定角标而非烧录中文文案
+    #   （证据 diag/idx39_residue_check.jpg）。真烧录字幕 conf 普遍 >=0.90，
+    #   在 1fps 下必然连续命中，不可能只稀疏命中 3 帧且跨度十几秒。
+    #   条件刻意收紧，**加本规则前必须先抽帧目视确认**，不许只看数字。
+    #   重编码后 OCR 采样会略变（同一角标可读成「周亚释」4帧/conf0.54 或
+    #   「周迎释」3帧/conf0.60，跨度 70~97s），故阈值按「极长跨度内稀疏命中」
+    #   这一固定角标特征设定，而不是按帧数硬卡。
+    sparse_misreads = [g for g in groups
+                       if g not in misreads
+                       and (g["max_confidence"] or 0) < 0.65
+                       and g["frame_count"] <= 5
+                       and len(g["text"]) <= 3
+                       and (g["last_sec"] - g["first_sec"]) >= 20.0]
+    for g in sparse_misreads:
+        g["misread_reason"] = "sparse_low_conf_graphic_badge"
+    misreads = misreads + sparse_misreads
+
     if misreads:
         keep = {g["text"] for g in groups if g not in misreads}
         residues = [r for r in residues if r["text"] in keep]
@@ -509,6 +555,33 @@ def check_chinese_residue(output_dir: str, work_dir: str,
                        + ", ".join(f"{g['text']!r}@{g['first_sec']}s conf={g['max_confidence']:.2f}"
                                    for g in misreads) + "）")
 
+    # 单字中文：错杀成本高（球衣纹理常被读成「热」「球」），所以不判 FAIL；
+    # 但"高置信 + 持续 ≥3 帧"几乎不可能是噪声 —— 报 warning 要求抽帧目视。
+    single_map: Dict[str, List[Dict[str, Any]]] = {}
+    for r in singles:
+        single_map.setdefault(r["text"], []).append(r)
+    single_groups = []
+    for text, items in single_map.items():
+        confs = [(it["confidence"] or 0) for it in items]
+        if len(items) >= 3 and max(confs) >= 0.9:
+            single_groups.append({
+                "text": text,
+                "first_sec": min(it["timestamp_sec"] for it in items),
+                "last_sec": max(it["timestamp_sec"] for it in items),
+                "frame_count": len(items),
+                "max_confidence": max(confs),
+                "bbox": items[0]["bbox"],
+            })
+    single_groups.sort(key=lambda g: -g["frame_count"])
+    if not residues and single_groups:
+        status = "warning"
+        detail += (f"；另有 {len(single_groups)} 处单字中文（高置信且 ≥3 帧，疑似 "
+                   f"logo/水印单字，需抽帧目视）："
+                   + ", ".join(f"「{g['text'][:2]}」{g['first_sec']}-{g['last_sec']}s "
+                               f"bbox={g['bbox']}" for g in single_groups[:3]))
+        log.warning(f"  单字中文候选 {len(single_groups)} 处，需目视："
+                    + ", ".join(f"{g['text']!r}@{g['first_sec']}s" for g in single_groups[:5]))
+
     return {
         "status": status,
         "engine": "rapidocr_local",
@@ -516,6 +589,7 @@ def check_chinese_residue(output_dir: str, work_dir: str,
         "frames_scanned": len(frames),
         "residues": residues,
         "groups": groups,
+        "single_char_suspects": single_groups,
         "misreads_dropped": misreads,
         "single_frame_min_confidence": single_frame_min_confidence,
         "detail": detail,
@@ -569,6 +643,20 @@ def check_cover(output_dir: str, work_dir: str) -> Dict:
     chinese_residual = len(chinese_lines) > 0
     if not ocr_available:
         warnings.append("RapidOCR 不可用，封面中文残留检查被跳过 —— 这**不代表**封面没有中文")
+
+    # 目视复核（2026-11-03）：OCR 看不见 logo 里的图形化汉字，所以 OCR「零命中」
+    # 不构成「封面无中文」的证据。这里读取 Agent 的目视结论；没有结论就不给 pass，
+    # 避免 qa 的 pass 再次变成「假 PASS」。
+    visual_review = {"status": "warning", "state": "unavailable"}
+    try:
+        from double_check import check_cover_visual_review
+        visual_review = check_cover_visual_review(cover_path, work_dir)
+    except Exception as e:
+        log.warning(f"封面目视复核状态读取失败：{str(e)[:100]}")
+    if visual_review.get("status") != "pass":
+        warnings.append("cover visual review: " + (
+            visual_review.get("state") or "unknown") +
+            " —— OCR 对图形化汉字无效，封面必须目视确认后写 work/cover-review.json")
 
     # 标题颜色校验（品牌黄，取值来自 profile.cover_style.fill_color；禁止白色/黑白）
     profile_style = cover_plan.get("profile_cover_style", {})
@@ -641,6 +729,8 @@ def check_cover(output_dir: str, work_dir: str) -> Dict:
 
     if face_occluded:
         warnings.append("face occluded by text")
+    # 封面中文 = 硬失败（2026-11-03）：以前只记 warning，等于「有中文也能交付」。
+    # 封面是我们自己的画布，任何中文都说明源画面残留没擦掉。
     if chinese_residual:
         warnings.append(f"Chinese text on cover: {chinese_lines[:3]}")
     if not color_ok:
@@ -653,7 +743,8 @@ def check_cover(output_dir: str, work_dir: str) -> Dict:
         warnings.append("cover text outside the safe band (cropped in the "
                         f"profile grid): {outside}")
 
-    status = "pass" if not warnings else "warning"
+    status = ("fail" if (chinese_residual or visual_review.get("status") == "fail")
+              else ("pass" if not warnings else "warning"))
     return {
         "status": status,
         "detail": "; ".join(warnings) if warnings else
@@ -664,6 +755,11 @@ def check_cover(output_dir: str, work_dir: str) -> Dict:
         "faces_detected": faces,
         "chinese_residual": chinese_residual,
         "chinese_lines": chinese_lines[:5],
+        # OCR 只能证明「文字层没有中文」。图形化汉字（logo/徽标里的单字）本检查
+        # 看不见（实测 det 阶段 0 命中），必须由 double_check 的 cover-review 目视
+        # 门禁兜底 —— 不要把本字段的 pass 当成「封面绝对无中文」。
+        "chinese_scope": "ocr_text_only; graphic glyphs need visual review",
+        "visual_review_state": visual_review.get("state"),
         "fill_color_ok": color_ok,
         "fill_color": list(fill_color),
         "brand_text_rendered": brand_ok,
@@ -737,6 +833,27 @@ def check_audio(output_dir: str, work_dir: str) -> Dict:
 
     warnings = []
     detail_parts = [f"strategy={audio_strategy}"]
+
+    # 3) 策略 vs 原声诊断一致性（2026-11-13 新增，防「悄悄删掉原声」回归）
+    #    2026-11 有 3 条片子因为「无中文解说 → 直接 remove_original_bgm_only」
+    #    把英语解说/原片 BGM 整轨删了（SKILL §3.0）。这里做一道自动闸门。
+    sap = load_json(work_path(work_dir, "source-audio-profile.json"), {})
+    if sap:
+        rec = sap.get("recommended_strategy")
+        detail_parts.append(f"source_profile={rec}")
+        if (audio_strategy == "remove_original_bgm_only"
+                and rec and rec != "remove_original_bgm_only"
+                and (sap.get("has_speech") or sap.get("has_music"))):
+            warnings.append(
+                f"策略 remove_original_bgm_only 丢掉了**有内容**的原声"
+                f"（has_speech={sap.get('has_speech')}, "
+                f"lang={sap.get('speech_lang')}, has_music={sap.get('has_music')}；"
+                f"诊断建议 {rec}）。除非用户明确要求换掉原声，否则应改回 "
+                f"keep_original —— 否则成片只剩循环 BGM（SKILL §3.0）")
+    elif audio_strategy == "remove_original_bgm_only":
+        warnings.append(
+            "缺 work/source-audio-profile.json，却选了 remove_original_bgm_only："
+            "无法证明原声里没有解说/BGM。先跑 analyze_source_audio.py（§3.0）")
 
     # 2) TTS 轨电平（仅 mute_original_tts_bgm 等会产出 tts_track.wav）
     tts_track_path = work_path(work_dir, "tts_track.wav")

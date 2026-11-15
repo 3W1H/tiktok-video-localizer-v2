@@ -126,7 +126,131 @@ def merge_boxes(boxes, gap=24):
     return out
 
 
-def inpaint_regions(frame, boxes, frame_w, frame_h, radius):
+def _row_profile(sub, y, x1, x2, half=8, sigma_x=7.0):
+    """Average a band of rows and smooth ACROSS x.
+
+    A single boundary row interpolated down the box produces hard vertical
+    streaks (every column keeps its own colour for 100+ rows). Averaging
+    several rows + horizontal blur keeps only the large-scale light/shadow
+    gradient of the arena, so the fill reads as soft defocused background.
+    """
+    y0 = max(0, y - half)
+    y1 = min(sub.shape[0], y + half + 1)
+    band = sub[y0:y1, x1:x2].astype(np.float32).mean(axis=0)
+    return cv2.GaussianBlur(band.reshape(1, -1, 3),
+                            (0, 0), sigma_x).reshape(-1, 3)
+
+
+def _col_profile(sub, x, y1, y2, half=8, sigma_y=7.0):
+    """Column counterpart of _row_profile: average a band of columns and
+    smooth ALONG y, so a single dark object on the boundary does not paint a
+    vertical shadow stripe down the whole filled box.
+    """
+    x0 = max(0, x - half)
+    x1 = min(sub.shape[1], x + half + 1)
+    band = sub[y1:y2, x0:x1].astype(np.float32).mean(axis=1)
+    return cv2.GaussianBlur(band.reshape(-1, 1, 3),
+                            (0, 0), sigma_y).reshape(-1, 3)
+
+
+def _fill_by_vertical_blend(sub, x1, y1, x2, y2):
+    """Wide solid banner -> soft defocused background, no TELEA blob/smear.
+
+    2026-11-14 full-batch fix: when a cleanup box touches the TOP edge (y1==0)
+    the old code sampled row 0 as the "background above" -- which is still
+    inside the Chinese plate being erased -- so the whole box turned into hard
+    vertical colour streaks (idx0 t=26-28s). Now the four edges are sampled
+    with vectorised bilinear blending; a missing edge falls back to its
+    opposite, and if neither horizontal edge exists we use column profiles.
+    """
+    H, W = sub.shape[:2]
+    h, w = y2 - y1, x2 - x1
+    if h < 4 or w < 4:
+        return
+    top = _row_profile(sub, y1 - 1, x1, x2) if y1 >= 3 else None
+    bot = _row_profile(sub, y2, x1, x2) if y2 <= H - 3 else None
+    left = _col_profile(sub, x1 - 1, y1, y2) if x1 >= 3 else None
+    right = _col_profile(sub, x2, y1, y2) if x2 <= W - 3 else None
+    if top is None and bot is not None:
+        top = bot.copy()
+    if bot is None and top is not None:
+        bot = top.copy()
+    if left is None and right is not None:
+        left = right.copy()
+    if right is None and left is not None:
+        right = left.copy()
+
+    a = (np.arange(h, dtype=np.float32) + 1.0) / (h + 1.0)
+    b = (np.arange(w, dtype=np.float32) + 1.0) / (w + 1.0)
+    if top is not None:
+        vert = ((1.0 - a[:, None, None]) * top[None, :, :]
+                + a[:, None, None] * bot[None, :, :])
+    else:
+        vert = None
+    if left is not None:
+        horiz = ((1.0 - b[None, :, None]) * left[:, None, :]
+                 + b[None, :, None] * right[:, None, :])
+    else:
+        horiz = None
+    if vert is None and horiz is None:
+        return
+    fill = (0.5 * (vert + horiz) if (vert is not None and horiz is not None)
+            else (vert if vert is not None else horiz))
+    fill = cv2.GaussianBlur(fill, (0, 0), 2.0)
+    sub[y1:y2, x1:x2] = np.clip(fill, 0, 255).astype(np.uint8)
+
+
+def apply_vblend_regions(frame, regions, t, source=None):
+    """Compact opaque stickers (e.g. a fixed cartoon skull watermark).
+
+    TELEA on a small solid rectangle produces radial triangle smears, and a
+    feathered blend leaves white droplets from the sticker's crossbones.
+    Rebuild the box from the smoothed rows above/below instead: reads as soft
+    defocused background, erases 100% of the glyph, no dark blob, no residue.
+    ``source`` is the frame BEFORE inpainting - the feather ramp must blend
+    into untouched picture, not into TELEA smears.
+    """
+    H, W = frame.shape[:2]
+    for x1, y1, x2, y2, a, b, feather, bilinear in regions:
+        if not (a <= t < b):
+            continue
+        x1, y1, x2, y2 = max(0, x1), max(0, y1), min(W, x2), min(H, y2)
+        if x2 <= x1 or y2 <= y1 or (y2 - y1) < 4:
+            continue
+        pad = 12
+        px1, py1 = max(0, x1 - pad), max(0, y1 - pad)
+        px2, py2 = min(W, x2 + pad), min(H, y2 + pad)
+        sub = frame[py1:py2, px1:px2]
+        base = source[py1:py2, px1:px2] if source is not None else sub
+        cx1, cx2, cy1 = x1 - px1, x2 - px1, y1 - py1
+        top = _row_profile(base, max(0, cy1 - 1), cx1, cx2)
+        bot = _row_profile(base, min(base.shape[0] - 1, y2 - py1), cx1, cx2)
+        hh, ww = y2 - y1, x2 - x1
+        av = ((np.arange(hh) + 1.0) / (hh + 1.0))[:, None, None]
+        vert = (1.0 - av) * top[None, :, :] + av * bot[None, :, :]
+        if bilinear:
+            left = _col_profile(base, max(0, cx1 - 1), cy1, cy1 + hh)
+            right = _col_profile(base, min(base.shape[1] - 1, cx2), cy1, cy1 + hh)
+            bv = ((np.arange(ww) + 1.0) / (ww + 1.0))[None, :, None]
+            horiz = ((1.0 - bv) * left[:, None, :] +
+                     bv * right[:, None, :])
+            fill = (vert + horiz) / 2.0
+        else:
+            fill = vert.astype(np.float32)
+        fill = cv2.GaussianBlur(fill, (0, 0), 2.0)
+        if feather > 0:
+            ay = np.clip(np.minimum(np.arange(hh), np.arange(hh)[::-1]) / float(feather), 0, 1)
+            ax = np.clip(np.minimum(np.arange(ww), np.arange(ww)[::-1]) / float(feather), 0, 1)
+            al = np.minimum(ay[:, None], ax[None, :])
+            al = (al * al * (3 - 2 * al))[..., None]
+        else:
+            al = 1.0
+        reg = base[cy1:cy1 + hh, cx1:cx2].astype(np.float32)
+        sub[cy1:cy1 + hh, cx1:cx2] = np.clip(reg * (1 - al) + fill * al, 0, 255).astype(np.uint8)
+    return frame
+
+
+def inpaint_regions(frame, boxes, frame_w, frame_h, radius, large_fill=False):
     """Inpaint only the ROI around each merged box. Equivalent to masking the
     whole frame but ~10-20x faster, because cv2.inpaint cost scales with the
     image it is given, not with the masked area."""
@@ -138,6 +262,14 @@ def inpaint_regions(frame, boxes, frame_w, frame_h, radius):
         py2 = min(frame_h, by2 + ROI_PAD)
         sub = frame[py1:py2, px1:px2]
         if sub.size == 0:
+            continue
+        if large_fill and (by2 - by1) >= 80 and (bx2 - bx1) >= 300:
+            mx1 = max(0, bx1 - px1)
+            my1 = max(0, by1 - py1)
+            mx2 = min(sub.shape[1], bx2 - px1)
+            my2 = min(sub.shape[0], by2 - py1)
+            _fill_by_vertical_blend(sub, mx1, my1, mx2, my2)
+            frame[py1:py2, px1:px2] = sub
             continue
         m = np.zeros(sub.shape[:2], dtype=np.uint8)
         for ox1, oy1, ox2, oy2 in boxes:
@@ -390,6 +522,10 @@ def main():
     ap.add_argument("--inpaint-radius", type=int, default=5)
     ap.add_argument("--crf", type=int, default=18)
     ap.add_argument("--preset", default="medium")
+    ap.add_argument("--large-region-fill", action="store_true",
+                    help="for wide/tall solid banners, replace TELEA inpainting "
+                         "with a vertical blend of the rows above/below the box "
+                         "(avoids the dark smeared blob TELEA leaves on a 600x100 hole)")
     ap.add_argument("--hook-seconds", type=float, default=3.4)
     ap.add_argument("--logo-text", default="",
                     help="override brand mark text (default: plan watermark target_text)")
@@ -404,6 +540,12 @@ def main():
                          "cover_style.fill_color becomes the brand yellow so the "
                          "in-video marks and the cover can never drift apart")
     ap.add_argument("--no-logo", action="store_true", help="do not draw the brand mark")
+    ap.add_argument("--no-extra-text", action="store_true",
+                    help="ERASE-ONLY mode (user rule 2026-11-14): inpaint the source "
+                         "Chinese away but draw NO new title / hook / subtitle text. "
+                         "The brand mark from watermark slots is still drawn, and "
+                         "localization-plan.json keeps its translations so the external "
+                         "subtitles-en.srt is still produced.")
     ap.add_argument("--no-inpaint", action="store_true",
                     help="skip inpainting (logo/title-only pass on an already-cleaned video)")
     ap.add_argument("--save-clean-base", default="",
@@ -445,6 +587,31 @@ def main():
     args = ap.parse_args()
 
     plan = json.load(open(os.path.join(args.work_dir, "localization-plan.json")))
+    if args.no_extra_text:
+        # User rule 2026-11-14: never ADD explanatory titles/hooks/subtitles to the
+        # picture. Only erase the original Chinese. Keep watermark slots alive so
+        # the series brand mark still renders (QA expects brand_text_rendered).
+        n_muted = 0
+        for it in plan.get("items", []):
+            if it.get("category") != "watermark" and it.get("target_text"):
+                it["target_text"] = None
+                n_muted += 1
+        print(f"erase-only: {n_muted} translated text draws suppressed "
+              f"(masks / SRT / brand mark unchanged)")
+    # Plan items may request a vertical-blend fill for compact opaque stickers.
+    vblend_regions = []
+    for it in plan.get("items", []):
+        if it.get("fill_method") == "vblend":
+            bb = it.get("bbox") or {}
+            bx, by = int(bb.get("x", 0)), int(bb.get("y", 0))
+            vblend_regions.append((bx, by, bx + int(bb.get("w", 0)),
+                                   by + int(bb.get("h", 0)),
+                                   float(it.get("start_time", 0)),
+                                   float(it.get("end_time", 0)),
+                                   int(it.get("vblend_feather", 0)),
+                                   bool(it.get("vblend_bilinear", False))))
+    if vblend_regions:
+        print("vblend regions: %d" % len(vblend_regions))
     masks_data = json.load(open(os.path.join(args.work_dir, "masks", "masks-index.json")))
     masks = masks_data.get("masks", [])
 
@@ -561,8 +728,13 @@ def main():
                     boxes.append([max(0, b["x"] - 2), max(0, b["y"] - 2),
                                   min(frame_w, b["x"] + b["w"] + 2),
                                   min(frame_h, b["y"] + b["h"] + 2)])
+        src_frame = frame.copy() if vblend_regions else None
         if boxes:
-            frame = inpaint_regions(frame, boxes, frame_w, frame_h, args.inpaint_radius)
+            frame = inpaint_regions(frame, boxes, frame_w, frame_h,
+                                   args.inpaint_radius,
+                                   large_fill=args.large_region_fill)
+        if vblend_regions:
+            frame = apply_vblend_regions(frame, vblend_regions, t, src_frame)
 
         # snapshot the clean frame BEFORE drawing on top of it
         if base_proc is not None:
