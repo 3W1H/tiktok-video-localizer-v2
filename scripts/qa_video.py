@@ -2,7 +2,7 @@
 """
 qa_video.py - 质量检查
 
-六类检查 + 首帧门禁：
+八类检查 + 首帧门禁：
   1. video:    无黑帧/花屏，时长一致
   2. subtitle: SRT 条目数、时间轴冲突
   3. cover:    人脸/主体未被遮挡
@@ -10,6 +10,7 @@ qa_video.py - 质量检查
   5. localization: 残留中文 OCR 抽检、水印区复检、replace 后 Logo 可见性、review 项汇总
   6. opening_frame: 【§11.1】第 0 帧必须是正片画面，不许是标题卡 / logo 卡 / 封面复刻帧
   7. chinese_residue: 【硬门禁】对 final.mp4 全片 OCR 扫描，检出中文即 FAIL
+  8. graphic_residue: 【§17.5】静态图形擦除残留(橙黄三角/红按钮)扫描, warning 需目视确认
 
 输出：work/qa.json（PASS / WARNING / FAIL）
 
@@ -328,6 +329,116 @@ def _probe_duration(video: str) -> float:
         return float((r.stdout or "").strip())
     except Exception:
         return 0.0
+
+
+def check_graphic_residue(output_dir: str, work_dir: str,
+                          fps: float = 1.0, max_frames: int = 90) -> Dict:
+    """【图形残留门禁】检测擦除伪影: 静态、全片同位置的孤立暖色小图形。
+
+    为什么需要 (SKILL §17.5b/17.5c, 2026-11-17 连犯 3 次):
+      chinese_residue 是文字 OCR, 对 TELEA 擦除色块边缘留下的三角/红按钮无感;
+      double_check 的图形检查在批处理被跳过 -> 这类残留每次都只能靠肉眼发现。
+      本项直接看成品画面, 抓「擦除算法制造的图形」, 不依赖 plan / OCR。
+
+    判据 (兼顾低误报):
+      1. 孤立高饱和暖色小色块: 橙/黄三角(R>180,90<G<205,B<150)或红按钮
+         (R>165,G<100,B<100), 连通域面积 60..9000, 填充率>0.45, 颜色单一。
+         B 放宽到 <150 是为了抓「被擦除条模糊后偏灰」的黄三角(实测色值
+         [187,170,119]); 球场木地板虽也偏黄但面积大/低填充 -> 被排除,
+         且静态判据(下条)进一步排除动态地板/球衣。
+      2. 【静态】同一归一化网格位置(±4%W/±6%H)在 >=50% 采样帧都出现 ->
+         真擦除伪影(全片静态); 动态球衣/地板位置随镜头变 -> 被排除。
+      3. 返回 status=warning (图形检测有误报风险, 不设 fail 阻塞交付),
+         detail 列出可疑位置的归一化坐标 —— 交付前自查会看到并人工目视复核。
+
+    ⚠️ 已知误报模式(2026-11-17 全批验证, 必须目视排除):
+      - 静态英文字幕笔画: 如文班十五佳球的黄色"Victor Wembanyama", 每个字母
+        被当成独立小色块、全片同位置 -> 命中 y≈21% 多个 x。合法英文内容, 非残留。
+      - 转播包装大面积红底: 如杜兰特控球右下角 x86% y99% 的红色转播图形。
+        色块偏大且贴画面角落, 非擦除伪影。
+      真残留(擦除伪影)特征: 色块紧邻一条低纹理模糊擦除条, 位于源片标题/品牌条位置。
+
+    这是 FIND 门禁: 命中必须抽帧目视确认后再改, 不许只看数字下结论。
+    """
+    import numpy as np
+    import cv2
+
+    final_path = os.path.join(output_dir, "final.mp4")
+    if not os.path.exists(final_path):
+        return {"status": "warning", "detail": "final.mp4 not found",
+                "suspects": [], "frames_scanned": 0}
+
+    tmp = tempfile.mkdtemp(prefix="ttl-qa-graphic-")
+    try:
+        run(["ffmpeg", "-y", "-v", "error", "-i", final_path,
+             "-vf", f"fps={fps}", "-q:v", "4",
+             os.path.join(tmp, "f%05d.jpg")], check=False)
+        frames = sorted(glob.glob(os.path.join(tmp, "f*.jpg")))
+        if not frames:
+            return {"status": "warning", "detail": "no frames decoded",
+                    "suspects": [], "frames_scanned": 0}
+        sample = frames[::max(1, len(frames) // max_frames)][:max_frames]
+
+        def blobs(rgb):
+            a = rgb.astype(int)
+            warm = ((a[:, :, 0] > 180) & (a[:, :, 1] > 90) &
+                    (a[:, :, 1] < 205) & (a[:, :, 2] < 150)).astype(np.uint8)
+            red = ((a[:, :, 0] > 165) & (a[:, :, 1] < 100) &
+                   (a[:, :, 2] < 100)).astype(np.uint8)
+            out = []
+            for mask in (warm, red):
+                n, lab, stats, cents = cv2.connectedComponentsWithStats(mask, 8)
+                for i in range(1, n):
+                    x, y, w, h, area = stats[i]
+                    if not (60 <= area <= 9000 and 8 <= w <= 140 and 8 <= h <= 140):
+                        continue
+                    if area / float(w * h) < 0.45:  # filled shape, not texture
+                        continue
+                    out.append((cents[i][0], cents[i][1]))  # px centre
+            return out
+
+        # cell vote: quantise centre to grid; static residue keeps appearing in one cell
+        CELL_W, CELL_H = 0.04, 0.06  # fraction of frame
+        votes = {}
+        n_frames = 0
+        H = W = None
+        for f in sample:
+            img = cv2.imread(f)
+            if img is None:
+                continue
+            rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            H, W = rgb.shape[:2]
+            n_frames += 1
+            seen = set()
+            for cx, cy in blobs(rgb):
+                key = (int(cx / W / CELL_W), int(cy / H / CELL_H))
+                seen.add(key)
+            for key in seen:
+                votes[key] = votes.get(key, 0) + 1
+        need = max(3, int(0.5 * n_frames))
+        suspects = []
+        for (gx, gy), cnt in sorted(votes.items(), key=lambda kv: -kv[1]):
+            if cnt < need:
+                continue
+            suspects.append({
+                "x_frac": round((gx + 0.5) * CELL_W, 3),
+                "y_frac": round((gy + 0.5) * CELL_H, 3),
+                "frames": cnt, "total": n_frames,
+            })
+        if suspects:
+            return {
+                "status": "warning",
+                "detail": ("检测到 %d 处疑似静态图形残留(擦除伪影); "
+                           "必须抽帧目视确认后再处理, 勿只看数字" % len(suspects)),
+                "suspects": suspects[:12], "frames_scanned": n_frames,
+                "cell_grid_pct": [CELL_W * 100, CELL_H * 100],
+            }
+        return {"status": "pass",
+                "detail": "未检出静态图形擦除残留(暖色三角/红按钮)",
+                "suspects": [], "frames_scanned": n_frames}
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def check_chinese_residue(output_dir: str, work_dir: str,
@@ -1009,6 +1120,8 @@ def main():
     log.info("  对成品 final.mp4 全片跑中文残留硬门禁（这一步不看 plan，只看画面）...")
     residue_check = check_chinese_residue(args.output_dir, args.work_dir, args.residue_fps,
                                           single_frame_min_confidence=args.residue_single_frame_conf)
+    log.info("  扫描静态图形擦除残留（橙/黄三角、红按钮；§17.5b/17.5c）...")
+    graphic_check = check_graphic_residue(args.output_dir, args.work_dir, args.residue_fps)
 
     # 汇总降级
     degradations = []
@@ -1038,7 +1151,7 @@ def main():
 
     # 整体状态
     checks = [video_check, subtitle_check, cover_check, audio_check,
-              localization_check, opening_check, residue_check]
+              localization_check, opening_check, residue_check, graphic_check]
     if any(c["status"] == "fail" for c in checks):
         overall = "FAIL"
     elif any(c["status"] == "warning" for c in checks):
@@ -1056,6 +1169,7 @@ def main():
             "localization": localization_check,
             "opening_frame": opening_check,
             "chinese_residue": residue_check,
+            "graphic_residue": graphic_check,
         },
         "degradations": degradations,
         "review_items": review_items,
@@ -1082,6 +1196,11 @@ def main():
         log.error("  处理完这些残留后必须重跑本检查，不得直接交付。")
     elif residue_check["status"] == "warning":
         log.warning(f"  {residue_check['detail']}")
+    if graphic_check["status"] == "warning":
+        log.warning(f"  [§17.5] {graphic_check['detail']}")
+        for s in graphic_check.get("suspects", []):
+            log.warning(f"       位置 x={s['x_frac']:.0%} y={s['y_frac']:.0%} "
+                        f"出现于 {s['frames']}/{s['total']} 帧 —— 抽帧目视确认")
     if degradations:
         log.warning(f"  Degradations: {len(degradations)}")
     if review_items:
