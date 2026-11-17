@@ -8,15 +8,19 @@ that need the vblend fix:
 
     python check_badge_residue.py [--root ~/Downloads/tiktok] [--fps 0.5]
 
-Detection per sampled frame (top 45% of frame):
-  - build saturated warm mask (R>185, G 90..205, B<110)
-  - keep only "solid" blobs: a connected component with fill ratio > 0.55 and
-    area 400..9000 px, whose colour std is low (a filled triangle, not texture)
-  - require a LEFT blob (cx < 32% W) AND a RIGHT blob (cx > 68% W) at nearly
-    the SAME y (within 8% H) -> the signature symmetric ◀ ▶ pair
-  - a clip is flagged only if the same pair persists on >=3 sampled frames.
+Detection per sampled frame:
+  TOP (top 45%): symmetric orange triangle pair (see SKILL §17.5b)
+    - saturated warm mask (R>185, G 90..205, B<110)
+    - "solid" blobs: connected component fill ratio > 0.55, area 400..9000 px
+    - LEFT blob (cx<32%W) AND RIGHT blob (cx>68%W) at same y (within 8%H)
+  BOTTOM (0.70..0.94H, central 0.20..0.80W): brand subscribe bar residue
+    (see SKILL §17.5c) - a RED rounded play button (red blob containing a white
+    ▶), typical of "篮球世界" UP watermark left behind after text-only erase.
+  A clip is flagged only if the signature persists on >=3 sampled frames.
 
-Prints one line per hit; exit code 0 always (use --strict to exit 1 on hits).
+NOTE: bottom RED detection can false-positive on arena floor / red uniforms.
+This is a FIND tool, not a hard gate - always eyeball a contact sheet of hits
+before acting. Prints one line per hit; exit 0 always (--strict -> exit 1).
 """
 import argparse, glob, os, subprocess, sys, tempfile
 import numpy as np
@@ -57,6 +61,29 @@ def tri_pair(frame, W, H):
     return None
 
 
+def brand_button(frame, W, H):
+    """RED rounded play-button: a compact red blob containing white pixels,
+    in the lower-central brand-bar zone. Returns True if found."""
+    roi = frame[int(0.70 * H):int(0.94 * H), int(0.20 * W):int(0.80 * W)]
+    a = roi.astype(int)
+    red = ((a[:, :, 0] > 165) & (a[:, :, 1] < 100) &
+           (a[:, :, 2] < 100)).astype(np.uint8)
+    white = ((a[:, :, 0] > 205) & (a[:, :, 1] > 205) &
+             (a[:, :, 2] > 205)).astype(np.uint8)
+    if red.sum() < 40:
+        return False
+    # play button = red pixels immediately adjacent to white (the white ▶)
+    near = cv2.dilate(white, np.ones((5, 5), np.uint8), iterations=1)
+    btn = red & near
+    n, lab, stats, cents = cv2.connectedComponentsWithStats(btn, 8)
+    for i in range(1, n):
+        x, y, w, h, area = stats[i]
+        # compact button-sized blob, not a big red floor/uniform region
+        if 25 <= area <= 4000 and 8 <= w <= 90 and 8 <= h <= 90:
+            return True
+    return False
+
+
 def scan_clip(mp4, fps):
     tmp = tempfile.mkdtemp(prefix="ttl-badge-")
     subprocess.run([FFMPEG, "-y", "-v", "error", "-i", mp4,
@@ -64,8 +91,9 @@ def scan_clip(mp4, fps):
                     os.path.join(tmp, "f%05d.jpg")], check=False)
     frames = sorted(glob.glob(os.path.join(tmp, "f*.jpg")))
     if not frames:
-        return 0, 0
-    hits = 0
+        return 0, 0, 0
+    top_hits = 0
+    bot_hits = 0
     sample = frames[::max(1, len(frames) // 60)][:60]
     for f in sample:
         img = cv2.imread(f)
@@ -74,8 +102,10 @@ def scan_clip(mp4, fps):
         rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         H, W = rgb.shape[:2]
         if tri_pair(rgb, W, H):
-            hits += 1
-    return len(sample), hits
+            top_hits += 1
+        if brand_button(rgb, W, H):
+            bot_hits += 1
+    return len(sample), top_hits, bot_hits
 
 
 def main():
@@ -89,12 +119,18 @@ def main():
             os.path.exists(os.path.join(a.root, d, "final.mp4"))]
     flagged = []
     for d in dirs:
-        n, h = scan_clip(os.path.join(d, "final.mp4"), a.fps)
-        if h >= 3:
-            flagged.append((os.path.basename(d), n, h))
-            print("HIT  %-52s pair-on %d/%d frames" %
-                  (os.path.basename(d)[:52], h, n))
-    print("flagged %d / %d clips" % (len(flagged), len(dirs)))
+        n, th, bh = scan_clip(os.path.join(d, "final.mp4"), a.fps)
+        kinds = []
+        if th >= 3:
+            kinds.append("TOP-triangle %d/%d" % (th, n))
+        if bh >= 3:
+            kinds.append("BOTTOM-brandbar %d/%d" % (bh, n))
+        if kinds:
+            flagged.append(os.path.basename(d))
+            print("HIT  %-50s %s" %
+                  (os.path.basename(d)[:50], ", ".join(kinds)))
+    print("flagged %d / %d clips (eyeball each HIT before fixing)" %
+          (len(flagged), len(dirs)))
     if a.strict and flagged:
         sys.exit(1)
 
