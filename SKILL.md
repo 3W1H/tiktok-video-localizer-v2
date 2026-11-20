@@ -3923,6 +3923,57 @@ bilinear=true）；源片底部是橙黄渐变背景时 vblend 过渡自然、�
 4. 用户报「又出现了」→ 先判断是不是同类系统性问题 / 是不是另一处独立的框
    （顶部标题框 ≠ 底部品牌条框，一条视频可能两处都中），别只补一个框。
 
+### 17.5e 常驻水印被切成短窗 → 其余时段全漏擦（2026-11-20，Airball 实录）
+
+**症状**：用户指出「左上角 logo 没处理」。成片 1.33–178s 全片左上都有
+白色描边「空气球 / Airball」水印，但 `localization-plan.json` 里只有 6 个
+**2–20s 的短窗**擦它（5–7.5 / 28–48.5 / 64–67.5 / 98–103.5 / 139–142.5 /
+153–155.5），其余约 100 秒完全没框；被擦的 6 段还是 TELEA → 留白色糊块，
+比原 logo 更显眼。
+
+**根因（与 17.5b/c 的 TELEA 渗色不同，是时间窗错误）**：
+- `text-tracks.json` 里 `'Airball'` 轨迹明明是 **0–178s 全片常驻、239 次检出**，
+  但 auto 拆窗把它按 OCR 逐次命中切成短段，只覆盖了检出密集的那几段。
+- §4 的 `normalize_persistent_starts()` 只管**起点归零**，不管**终点到片长**：
+  起点 0 了、`end_time` 仍是最后一个密集检出的时刻，后面的空档全漏。
+- QA 三道门禁全盲：`chinese_residue` 读的是汉字，Airball 是英文；
+  `graphic_residue` 只找高饱和暖色块，白字不算；`double_check` 批处理跳过。
+
+**先查再改（1 分钟定位）**：
+```bash
+# ① 看轨迹时长：duration_sec 接近片长 + detection_count 很高 => 常驻
+python -c "import json; d=json.load(open('work/text-tracks.json')); \
+ [print(t['text'],t.get('duration_sec'),t.get('detection_count')) for t in d['tracks'] if t.get('duration_sec',0)>0.9*片长]"
+# ② 看 plan 里对应框的 end_time：远小于片长 => 确诊
+# ③ 逐秒扫成品 ROI 白像素占比：white≈0.17–0.98 = logo 在；white≈0 = 被擦
+```
+⚠️ 中文艺术字会被 OCR 读成「周迎释/广更祥释」等错字，别按文本名找，
+按 **ROI 位置 + 轨迹时长** 找。
+
+**正解（已实测）**：
+- **不要从源片整片重渲**：这条片头 0–1.32s 有额外 `drawbox` 置黑
+  （源片 1.2s 已亮、成品延到 1.32s），从源片重渲会丢片头处理；音频是
+  `tts_keep_instrumental`（demucs 去人声留伴奏），也不能从源片取音轨。
+- **在最终成品上做局部画面补丁**：逐帧读 `final.mp4`，仅 logo 框用
+  `render_overlays.py::apply_vblend_regions()` 基于**当前帧原始像素**重建
+  （feather 帧边界保留原像素，所以框必须比字形四周各大 ≥12px），
+  编码新画面 + **`-map 1:a -c copy`** 贴回原音轨。片头/其它擦除/音频
+  逐位不动。工具：`scripts/patch_airball_logo.py`（可复用于任意固定角标）。
+- **白描边字压复杂动态背景：用 vblend，绝不用 TELEA 笔画掩膜**。实测同一批
+  帧：`delogo_static` 的 top-hat 掩膜（阈值 7/12/18/25 全试过）在白色描边字
+  上会把整块字响应成一片，inpaint 后在球馆/观众席上留下**多边形涂抹斑**
+  （比 logo 更丑）；vblend 整框只是柔和虚化、无硬边。这是 §17.7 的物理边界，
+  接受低频渐变。
+- vblend 框实测：字形 33–201 × 12–91 → 框 `(18,4)-(215,98)`，
+  `feather=6, bilinear=true`。**框底 y=98 不能碰下方粉色排名数字（y≈102 起）**——
+  那是排名 token 属内容，必须保留（§1）。
+- 片头纯黑段（0–1.32s）没有 logo，补丁起点设 1.33s；整片补丁也无妨
+  （纯黑底 vblend 四边采样仍是黑，但没必要）。
+
+**根治方向**：`auto_decide` 拆分常驻项时，`end_time` 必须取 `probe.duration`
+（不能取最后密集检出时刻）；QA 加一条「常驻轨迹 vs plan 时间覆盖」一致性
+检查，轨迹 ≥0.9×片长但 plan 覆盖 <0.9×片长 → warning。
+
 ### 17.6 时间窗 padding 与纯黑片头
 
 - `render_overlays.py` 的 `PAD_HEAD=0.5` / `PAD_TAIL=0.35` 会在渲染时**再扩窗**。
